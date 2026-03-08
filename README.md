@@ -41,6 +41,57 @@
 
 在 Actions 页面点击 **Run workflow**，可选填 PyTorch nightly 日期（格式 `YYYYMMDD`），留空使用最新版。
 
+## 通过 Skill 生成 workflow
+
+仓库已内置 `nightly-build-workflow-generator` skill，可自动生成/更新
+`.github/workflows/nightly-build.yml`。
+
+### 快速生成
+
+```bash
+python3 skills/nightly-build-workflow-generator/scripts/generate_nightly_build.py \
+  --output .github/workflows/nightly-build.yml
+```
+
+### 仅预览（不落盘）
+
+```bash
+python3 skills/nightly-build-workflow-generator/scripts/generate_nightly_build.py \
+  --print-only
+```
+
+### 常用参数
+
+- 关闭 ccache：
+```bash
+python3 skills/nightly-build-workflow-generator/scripts/generate_nightly_build.py \
+  --no-enable-ccache \
+  --output .github/workflows/nightly-build.yml
+```
+
+- 显式禁用 torchair / 强制禁用 RPC（仅在有明确需求时）：
+```bash
+python3 skills/nightly-build-workflow-generator/scripts/generate_nightly_build.py \
+  --disable-torchair \
+  --disable-rpc \
+  --output .github/workflows/nightly-build.yml
+```
+
+- 自定义 Python、调度 cron、runner：
+```bash
+python3 skills/nightly-build-workflow-generator/scripts/generate_nightly_build.py \
+  --python-version 3.11 \
+  --schedule-cron "0 2 * * *" \
+  --runner ubuntu-22.04 \
+  --output .github/workflows/nightly-build.yml
+```
+
+生成后建议执行：
+
+```bash
+gh workflow run nightly-build.yml --repo kerer-ai/pytorch-npu-codex
+```
+
 ---
 
 ## 问题处理（Claude Code Skills）
