@@ -34,7 +34,18 @@ jobs:
             cmake ninja-build \
             gcc g++ \
             git \
-            patchelf
+            patchelf \
+            ccache
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-
+            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
       - name: Install PyTorch nightly (CPU, x86_64)
         id: install_torch
@@ -97,12 +108,24 @@ jobs:
         id: build
         run: |
           cd ascend_pytorch
-          # 禁用 torchair（需要额外子模块）和 RPC（简化构建）
-          export DISABLE_INSTALL_TORCHAIR=TRUE
-          export DISABLE_RPC_FRAMEWORK=TRUE
+          mkdir -p ~/.ccache
+          ccache -M 2G
+          ccache -z || true
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          export CCACHE_BASEDIR="${PWD}"
+          export CCACHE_DIR="${HOME}/.ccache"
+          export CCACHE_COMPRESS=1
+          export CCACHE_MAXSIZE=2G
+
+          # 默认启用 torchair 构建；RPC 使用默认构建行为（不强制禁用）
+          export DISABLE_INSTALL_TORCHAIR=FALSE
           export BUILD_WITHOUT_SHA=1
           python setup.py build bdist_wheel 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
+          CCACHE_STATS=$(ccache -s | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')
+          echo "stats=${CCACHE_STATS}" >> $GITHUB_OUTPUT
+          ccache -s || true
           echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
           if [ ${BUILD_STATUS} -eq 0 ]; then
             WHL=$(ls dist/*.whl 2>/dev/null | head -1)
@@ -110,6 +133,13 @@ jobs:
             echo "Build succeeded: ${WHL}"
           fi
           exit ${BUILD_STATUS}
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-${{ github.run_id }}
 
       - name: Upload build log
         if: always()
@@ -147,7 +177,9 @@ jobs:
           | Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://github.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |
           | Commit 时间 | ${{ steps.clone_repo.outputs.commit_date }} |
           | 已应用 Patch | ${{ steps.patch.outputs.applied || '(无)' }} |
+          | ccache 命中 | ${{ steps.ccache-restore.outputs.cache-hit == 'true' && '命中' || '未命中' }} |
           | 构建结果 | ${STATUS_ICON} |
 
           $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
+          > ccache 统计: `${{ steps.build.outputs.stats || 'N/A' }}`
           EOF
