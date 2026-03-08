@@ -123,8 +123,9 @@ jobs:
           export BUILD_WITHOUT_SHA=1
           python setup.py build bdist_wheel 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
-          CCACHE_STATS=$(ccache -s | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')
-          echo "stats=${CCACHE_STATS}" >> $GITHUB_OUTPUT
+          CCACHE_HIT_RATE=$(ccache -s | awk -F'[()]' '/Hits:/ {print $2; exit}')
+          [ -n "${CCACHE_HIT_RATE}" ] || CCACHE_HIT_RATE="N/A"
+          echo "hit_rate=${CCACHE_HIT_RATE}" >> $GITHUB_OUTPUT
           ccache -s || true
           echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
           if [ ${BUILD_STATUS} -eq 0 ]; then
@@ -178,8 +179,8 @@ jobs:
           | Commit 时间 | ${{ steps.clone_repo.outputs.commit_date }} |
           | 已应用 Patch | ${{ steps.patch.outputs.applied || '(无)' }} |
           | ccache 命中 | ${{ steps.ccache-restore.outputs.cache-hit == 'true' && '命中' || '未命中' }} |
+          | ccache 命中率 | ${{ steps.build.outputs.hit_rate || 'N/A' }} |
           | 构建结果 | ${STATUS_ICON} |
 
           $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
-          > ccache 统计: `${{ steps.build.outputs.stats || 'N/A' }}`
           EOF
