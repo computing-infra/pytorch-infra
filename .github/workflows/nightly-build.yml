@@ -42,9 +42,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-${{ github.run_id }}
+          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}
           restore-keys: |
-            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-
             ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
       - name: Install PyTorch nightly (CPU, x86_64)
@@ -140,7 +139,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-${{ github.run_id }}
+          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}
 
       - name: Upload build log
         if: always()
@@ -168,6 +167,17 @@ jobs:
             STATUS_ICON="❌ FAILED"
           fi
 
+          # 处理 patch 显示
+          PATCH_APPLIED="${{ steps.patch.outputs.applied }}"
+          PATCH_FAILED="${{ steps.patch.outputs.failed }}"
+          if [ -n "${PATCH_APPLIED}" ]; then
+            PATCH_DISPLAY="${PATCH_APPLIED}"
+          elif [ -n "${PATCH_FAILED}" ]; then
+            PATCH_DISPLAY="(全部失败: ${PATCH_FAILED})"
+          else
+            PATCH_DISPLAY="(无 patch 文件)"
+          fi
+
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ## Ascend/pytorch Nightly Build Validation
 
@@ -177,8 +187,7 @@ jobs:
           | PyTorch Nightly | \`${{ steps.install_torch.outputs.version }}\` |
           | Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://github.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |
           | Commit 时间 | ${{ steps.clone_repo.outputs.commit_date }} |
-          | 已应用 Patch | ${{ steps.patch.outputs.applied || '(无)' }} |
-          | ccache 命中 | ${{ steps.ccache-restore.outputs.cache-hit == 'true' && '命中' || '未命中' }} |
+          | 已应用 Patch | ${PATCH_DISPLAY} |
           | ccache 命中率 | ${{ steps.build.outputs.hit_rate || 'N/A' }} |
           | 构建结果 | ${STATUS_ICON} |
 
