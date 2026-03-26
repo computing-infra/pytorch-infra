@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-本仓库用于**每日集成验证** [Ascend/pytorch](https://github.com/Ascend/pytorch) 与 PyTorch nightly 版本的编译兼容性。
+本仓库用于**每日集成验证** [Ascend/pytorch](https://gitcode.com/Ascend/pytorch.git) 与 PyTorch nightly 版本的编译兼容性。
 
 ### 核心定位
 - **每日集成**：自动拉取 PyTorch nightly 和 Ascend/pytorch 最新代码进行编译验证
@@ -34,11 +34,11 @@ gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed
 
 ### 本地 Ascend/pytorch 克隆
 ```bash
-# 源码分析用的克隆路径
-/root/ascend_pytorch_tmp
+# 源码分析用的克隆路径（在项目 .tmp/ 目录下）
+.tmp/ascend_pytorch
 
 # 若不存在则克隆
-git clone --depth=1 https://github.com/Ascend/pytorch.git /root/ascend_pytorch_tmp
+git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
 ```
 
 ### PyTorch Nightly 头文件
@@ -66,12 +66,14 @@ git clone --depth=1 https://github.com/Ascend/pytorch.git /root/ascend_pytorch_t
 
 | 命令 | 用途 |
 |------|------|
-| `/analyze-failure` | 分析最新失败的 CI 运行，定位根本原因 |
-| `/report-issue` | 根据分析结果创建 issue 文档 |
+| `/analyze-failure` | 分析最新失败的 CI 运行，自动判断失败类型（编译失败/Workflow 脚本失败），输出结构化报告 |
+| `/report-issue` | 根据分析结果创建 issue 文档（仅用于编译失败，Workflow 问题直接修复） |
 
 ### 典型工作流
 ```
-CI 失败 → /analyze-failure → /report-issue → 输出修复建议
+CI 失败 → /analyze-failure
+              ├─ 编译失败 → /report-issue → 输出修复建议
+              └─ Workflow 脚本失败 → 直接修复 .github/workflows/*.yml
 ```
 
 ## CI 脚本注意事项
@@ -80,3 +82,13 @@ CI 失败 → /analyze-failure → /report-issue → 输出修复建议
 - 使用单行值或 heredoc 格式输出多行内容
 - 构建日志 artifact 使用 `if: always()` 确保失败时也能上传
 - ccache 已启用；命中率在 step summary 中查看
+
+## 文档维护
+
+**重要变更时及时更新本文档：**
+- 代码源变更（如 GitCode 切换）
+- Workflow 流程调整
+- Slash 命令增删或功能变化
+- 项目定位或工作边界调整
+
+> 修改 CLAUDE.md 后需提交并推送到远程仓库。
