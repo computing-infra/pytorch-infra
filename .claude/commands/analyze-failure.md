@@ -185,7 +185,7 @@ gh issue create -R computing-infra/pytorch-infra \
 > **注意**：此问题需在 Ascend/pytorch 上游仓库修复。
 EOF
 )" \
-  --label "bug,nightly-ci"
+  --label "bug,nightly-ci,ai"
 ```
 
 ---
