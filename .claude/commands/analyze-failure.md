@@ -70,6 +70,30 @@ gh run view <run_id> --repo computing-infra/pytorch-infra --log-failed 2>&1 \
   | head -30
 ```
 
+**重要：切换到对应源码版本**
+
+CI 每次构建使用特定 commit，分析时必须切换到对应版本才能准确定位问题。
+
+```bash
+# 从第二步提取的 commit id
+ASCEND_COMMIT="<从日志提取的完整 commit hash>"
+
+# 源码已存在时切换版本
+if [ -d ".tmp/ascend_pytorch" ]; then
+  cd .tmp/ascend_pytorch
+  git fetch --depth=1 origin ${ASCEND_COMMIT}
+  git checkout ${ASCEND_COMMIT}
+  cd -
+# 源码不存在时克隆
+else
+  git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
+  cd .tmp/ascend_pytorch
+  git fetch --depth=1 origin ${ASCEND_COMMIT}
+  git checkout ${ASCEND_COMMIT}
+  cd -
+fi
+```
+
 **失败类型分类：**
 
 | 类型 | 特征关键词 | 操作 |
