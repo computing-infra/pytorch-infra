@@ -1,6 +1,21 @@
-根据 CI 失败分析结果，在当前仓库创建 GitHub issue。
+根据 CI 构建结果管理 GitHub issue：创建新 issue 或关闭已修复的 issue。
 
-## 前置条件
+---
+
+## 执行模式
+
+根据当前构建结果选择不同操作：
+
+| 构建结果 | 操作 |
+|----------|------|
+| ❌ 失败 | 创建新 issue |
+| ✅ 成功 | 检查并关闭已修复的 issue |
+
+---
+
+## 模式一：构建失败 → 创建 issue
+
+### 前置条件
 
 需要已知以下信息（通常来自 `/analyze-failure` 的输出）：
 
@@ -9,7 +24,7 @@
 - Action 链接
 
 **版本信息：**
-- PyTorch nightly 版本号（如 `2.12.0.dev20260325+cpu`）
+- PyTorch nightly 版本号
 - Ascend/pytorch commit id 及提交时间
 
 **失败信息：**
@@ -17,36 +32,21 @@
 
 如果上述信息不明确，先运行 `/analyze-failure`。
 
-> 先判断失败类型：
-> - **兼容性失败（代码/API）**：创建 GitHub issue
-> - **CI 脚本失败（workflow 语法/输出格式）**：优先修 workflow，通常不创建 issue
-
----
-
-## 执行步骤
-
-### 第一步：检查重复 issue
-
-**检查 GitHub 是否已存在相同问题的 issue：**
+### 步骤 1：检查重复 issue
 
 ```bash
-gh issue list -R computing-infra/pytorch-infra --limit 50
+gh issue list -R computing-infra/pytorch-infra --state open --limit 50
 ```
 
 **去重判断标准：**
 - 标题相同或高度相似 → 视为重复，不创建
 - 同一受影响文件 + 同一错误类型 → 视为重复，不创建
-- 同一 API 变更导致的错误 → 视为重复，不创建
 
 **如果存在重复：**
 - 告知用户已存在相关 issue 链接
 - 不创建新 issue
 
----
-
-### 第二步：创建 GitHub issue
-
-**使用 gh issue create 创建 issue：**
+### 步骤 2：创建 GitHub issue
 
 ```bash
 gh issue create -R computing-infra/pytorch-infra \
@@ -85,7 +85,7 @@ gh issue create -R computing-infra/pytorch-infra \
 
 ## 根本原因
 
-（说明是什么导致了失败，PyTorch 上游做了什么改动，Ascend 侧依赖了哪个已删除/变更的接口）
+（说明是什么导致了失败）
 
 ---
 
@@ -107,18 +107,120 @@ EOF
   --label "bug,nightly-ci"
 ```
 
-**输出示例：**
+---
+
+## 模式二：构建成功 → 关闭已修复 issue
+
+### 步骤 1：获取当前构建信息
+
+提取当前构建的版本信息：
+
+```bash
+# 从 CI 日志或环境获取
+TORCH_VERSION="<当前 PyTorch nightly 版本>"
+ASCEND_COMMIT="<当前 Ascend/pytorch commit>"
 ```
-https://github.com/computing-infra/pytorch-infra/issues/123
+
+### 步骤 2：获取所有 open 状态的 issue
+
+```bash
+gh issue list -R computing-infra/pytorch-infra --state open --limit 50
+```
+
+解析每个 issue 的：
+- Issue ID
+- 标题
+- Body（包含受影响文件、错误类型等信息）
+
+### 步骤 3：检查是否需要关闭
+
+对于每个 open issue，执行以下检查：
+
+#### 3.1 提取 issue 特征
+
+从 issue body 提取：
+- **受影响文件**：如 `ProcessGroupHCCL.cpp`
+- **错误类型**：如 `API 删除`、`签名变更`、`枚举值不存在`
+- **关键标识符**：如 `SocVersion::Ascend910_95`
+
+#### 3.2 判断是否应该关闭
+
+**关闭条件（满足任一）：**
+
+| 条件 | 说明 |
+|------|------|
+| 构建成功 | 整体构建成功，无任何编译错误 |
+| 错误未重现 | 当前构建日志中不存在该 issue 描述的错误 |
+
+**检查方法：**
+
+```bash
+# 获取当前构建日志
+gh run view <run_id> --repo computing-infra/pytorch-infra --log > /tmp/current_build.log
+
+# 检查错误是否仍存在
+grep -E "<关键错误特征>" /tmp/current_build.log
+```
+
+- **无匹配**：错误已修复，可以关闭 issue
+- **有匹配**：错误仍存在，保持 issue open
+
+### 步骤 4：关闭 issue
+
+对于判定为已修复的 issue：
+
+```bash
+gh issue close <issue_id> -R computing-infra/pytorch-infra \
+  --comment "✅ **自动关闭：问题已修复**
+
+构建成功验证：
+- PyTorch Nightly: \`<版本>\`
+- Ascend/pytorch Commit: \`<commit>\`
+- 验证构建: #<run_id>
+
+该问题在上述版本中已不再出现，自动标记为已修复。"
+```
+
+### 步骤 5：输出结果
+
+```
+## Issue 状态更新
+
+### 已关闭（已修复）
+- #123: ProcessGroupHCCL 枚举错误
+  原因：当前构建成功，错误未重现
+
+### 保持开启
+- #456: 其他问题
+  原因：错误仍在当前构建中出现
 ```
 
 ---
 
-### 第三步：完成后输出
+## 判断流程图
 
-告知用户：
-- issue 创建成功，提供链接
-- 提醒问题需在 Ascend/pytorch 上游仓库修复
+```
+构建结果
+    │
+    ├─ ❌ 失败
+    │      │
+    │      ▼
+    │   检查重复 issue
+    │      │
+    │      ├─ 存在重复 → 跳过
+    │      └─ 无重复 → 创建新 issue
+    │
+    └─ ✅ 成功
+           │
+           ▼
+        获取 open issue 列表
+           │
+           ▼
+        对每个 issue 检查错误是否仍存在
+           │
+           ├─ 错误已消失 → 关闭 issue
+           └─ 错误仍存在 → 保持开启
+```
 
 ---
 
@@ -129,3 +231,11 @@ https://github.com/computing-infra/pytorch-infra/issues/123
 - artifact 上传、summary 渲染、缓存步骤等基础设施问题
 
 这类问题应直接提交 workflow 修复。
+
+---
+
+## 注意事项
+
+- 关闭 issue 时必须添加评论说明原因
+- 评论中包含验证通过的版本信息
+- 如有误关闭，可手动重新开启

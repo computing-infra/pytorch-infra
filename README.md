@@ -39,7 +39,7 @@
 | 命令 | 用途 |
 |------|------|
 | `/analyze-failure` | 拉取日志、定位根因、输出结构化报告 |
-| `/report-issue` | 在 GitHub 创建 issue |
+| `/report-issue` | 失败时创建 issue，成功时关闭已修复的 |
 | `/sync-issues` | 将 GitHub issue 同步到 GitCode 平台 |
 
 **典型流程：** CI 失败 → `/analyze-failure` → `/report-issue` → `/sync-issues`
