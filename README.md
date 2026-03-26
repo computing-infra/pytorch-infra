@@ -40,6 +40,6 @@
 |------|------|
 | `/analyze-failure` | 拉取日志、定位根因、输出结构化报告 |
 | `/report-issue` | 在 GitHub 创建 issue |
-| `/sync-issues` | 本地 issues 与 GitCode 双向同步 |
+| `/sync-issues` | 将 GitHub issue 同步到 GitCode 平台 |
 
 **典型流程：** CI 失败 → `/analyze-failure` → `/report-issue` → `/sync-issues`

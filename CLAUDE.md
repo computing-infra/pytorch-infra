@@ -68,7 +68,7 @@ git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
 |------|------|
 | `/analyze-failure` | 分析最新失败的 CI 运行，自动判断失败类型，输出版本信息和结构化报告 |
 | `/report-issue` | 根据分析结果在 GitHub 创建 issue |
-| `/sync-issues` | 本地 issues 与 GitCode 双向同步：创建新 issue、同步远程状态 |
+| `/sync-issues` | 将 GitHub issue 同步到 GitCode 平台 |
 | `/scheduled-ci-analysis` | 创建每日定时 CI 分析任务（北京时间 08:00），自动执行完整分析流程 |
 
 ### 典型工作流
@@ -78,25 +78,6 @@ CI 失败 → /analyze-failure
               │                        → /sync-issues → GitCode issue
               └─ Workflow 脚本失败 → 直接修复 .github/workflows/*.yml
 ```
-
-### 本地 issue 文件格式
-
-本地 `issues/` 目录用于归档问题，包含 frontmatter 记录同步状态：
-
-```markdown
----
-gitcode_issue_id: 123
-gitcode_issue_status: open
----
-
-# [2026-03-26-001] 问题标题
-...
-```
-
-| 字段 | 说明 |
-|------|------|
-| `gitcode_issue_id` | GitCode issue 编号 |
-| `gitcode_issue_status` | 远程状态（open/closed） |
 
 ## CI 脚本注意事项
 
