@@ -243,3 +243,21 @@ git push
 - **标签**：所有 issue 统一添加 `ai-analyze` 和 `nightly-ci` 两个标签
 - **目标仓库**：固定为 `kerer-sk/pytorch`
 - **本地文件更新**：同步成功后必须更新本地文件添加 `gitcode_issue_id`，避免重复提交
+
+---
+
+## 错误案例
+
+### 案例：远程 issue 被删除后重复创建
+
+**现象**：
+1. 第一次执行 `gc issue list` 返回 `#1, #2, #3`，匹配到 `#3` 标题相同
+2. 更新本地文件 frontmatter 为 `gitcode_issue_id: 3`
+3. 后来远程 `#1, #2, #3` 被删除（或仓库重置）
+4. 第二次执行 `gc issue list` 返回 `No issues found`
+5. 错误地基于第一次的记忆，先写 `gitcode_issue_id: 3`，再创建新 issue 得到 `#4`
+
+**正确做法**：
+- 每次执行都以 `gc issue list` 的**实时结果**为准，不假设之前看到过的 issue 仍然存在
+- 创建新 issue 后，以 `gc issue create` 返回的 ID 写入 frontmatter
+- 若远程列表为空或无匹配，应直接创建新 issue
