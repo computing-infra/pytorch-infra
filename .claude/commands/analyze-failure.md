@@ -276,3 +276,39 @@ The job running on runner ... has exceeded the maximum execution time
 - 每次编译失败通常只暴露**当前最早的**错误，修完一个后下次构建才会暴露下一个
 - 本地克隆路径：`.tmp/ascend_pytorch`
 - PyTorch nightly 头文件路径：`/usr/local/lib/python3.12/dist-packages/torch/include/`
+
+---
+
+## 最后一步：更新常见失败类型
+
+**分析完成后，检查本次失败是否属于已知类型，若为新类型则更新本文档。**
+
+### 当前已知失败类型（共 5 类）
+
+| 序号 | 类型 | 特征关键词 |
+|------|------|------------|
+| 1 | 编译失败 | `error:`、`make[*]:`、`fatal error` |
+| 2 | Workflow 脚本失败 | `Invalid format`、`GITHUB_OUTPUT`、`Permission denied` |
+| 3 | 依赖安装失败 | `Unable to locate package`、`pip install failed` |
+| 4 | 超时失败 | `exceeded the maximum execution time` |
+| 5 | 网络问题 | `Connection refused`、`timed out`、`Could not resolve host` |
+
+### 判断与更新流程
+
+1. **匹配已知类型**：根据特征关键词判断是否属于上述 5 类
+2. **发现新类型**：若不匹配，总结该失败的特征和原因
+3. **更新文档**：将新类型加入"失败类型判断"表格和"常见失败类型速查表"
+4. **提交变更**：更新后执行 `git add/commit/push` 同步到远程
+
+### 新类型命名原则
+
+- **抽象层级**：按根本原因分类，而非表象
+- **数量控制**：总类型数不超过 10 个
+- **合并原则**：相似失败应合并为同一类型的子类
+
+**示例：**
+```
+新失败：磁盘空间不足 "No space left on device"
+→ 可归入"环境资源问题"（与网络问题同属环境类）
+→ 或作为新类型"资源不足"（若已有 3+ 个资源相关失败）
+```
