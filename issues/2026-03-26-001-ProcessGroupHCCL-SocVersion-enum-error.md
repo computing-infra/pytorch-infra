@@ -1,3 +1,7 @@
+---
+gitcode_issue_id: 3
+---
+
 # [2026-03-26-001] ProcessGroupHCCL 引用不存在的 SocVersion 枚举值
 
 ## 构建信息
