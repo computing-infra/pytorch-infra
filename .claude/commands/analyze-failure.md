@@ -139,9 +139,26 @@ gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log-failed 2>&1 \
 
 #### A3. 定位源文件
 
+**使用从 CI 日志中提取的 Ascend/pytorch commit id（`ASCEND_COMMIT`）切换到对应代码版本：**
+
 ```bash
-# 本地克隆源码（若不存在）
-git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
+# 设置目标 commit（从第二步提取）
+ASCEND_COMMIT="<从日志提取的完整 commit hash>"
+
+# 若本地源码已存在，fetch 并 checkout 到目标 commit
+if [ -d ".tmp/ascend_pytorch" ]; then
+  cd .tmp/ascend_pytorch
+  git fetch --depth=1 origin ${ASCEND_COMMIT}
+  git checkout ${ASCEND_COMMIT}
+  cd -
+# 若不存在，克隆指定 commit
+else
+  git clone --depth=1 --branch main https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
+  cd .tmp/ascend_pytorch
+  git fetch --depth=1 origin ${ASCEND_COMMIT}
+  git checkout ${ASCEND_COMMIT}
+  cd -
+fi
 
 # 查看受影响文件
 cat .tmp/ascend_pytorch/<受影响文件路径>
