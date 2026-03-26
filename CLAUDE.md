@@ -34,7 +34,7 @@ gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed
 
 ### 本地 Ascend/pytorch 克隆
 ```bash
-# patch 开发用的克隆路径
+# 源码分析用的克隆路径
 /root/ascend_pytorch_tmp
 
 # 若不存在则克隆
@@ -55,19 +55,12 @@ git clone --depth=1 https://github.com/Ascend/pytorch.git /root/ascend_pytorch_t
 - **构建流程**：
   1. 安装 PyTorch nightly（CPU 版）
   2. 克隆 Ascend/pytorch（含子模块）
-  3. 应用 `patches/*.patch` 中的补丁（自动发现）
-  4. 执行 `python setup.py build bdist_wheel` 构建 wheel
-  5. 上传构建产物（构建日志，成功时上传 wheel）
-
-### Patch 系统 (`patches/`)
-- 补丁按文件名顺序自动应用，命令为 `git apply --directory=ascend_pytorch`
-- 每个补丁解决一个具体的 API 兼容性问题
-- 当上游合入修复后，`git apply` 会失败 → 删除该补丁
+  3. 执行 `python setup.py build bdist_wheel` 构建 wheel
+  4. 上传构建产物（构建日志，成功时上传 wheel）
 
 ### Issue 追踪 (`issues/`)
 - 格式：`YYYY-MM-DD-NNN-<模块描述>.md`
 - 记录根本原因、受影响文件、修复建议
-- 关联对应的 patch 文件（如有）
 
 ## Slash 命令
 

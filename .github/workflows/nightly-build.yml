@@ -87,26 +87,6 @@ jobs:
           # 跳过 requirements.txt 中固定的 torch 版本，使用我们安装的 nightly
           pip install pyyaml setuptools auditwheel
 
-      - name: Apply compatibility patches
-        id: patch
-        run: |
-          PATCH_DIR="${GITHUB_WORKSPACE}/patches"
-          PATCH_APPLIED=""
-          PATCH_FAILED=""
-          for p in "${PATCH_DIR}"/*.patch; do
-            [ -f "$p" ] || continue
-            echo "Applying patch: $(basename $p)"
-            if git apply --directory=ascend_pytorch "$p"; then
-              echo "  ✅ OK"
-              PATCH_APPLIED="${PATCH_APPLIED} $(basename $p)"
-            else
-              echo "  ❌ FAILED (may already be merged upstream)"
-              PATCH_FAILED="${PATCH_FAILED} $(basename $p)"
-            fi
-          done
-          echo "applied=${PATCH_APPLIED}" >> $GITHUB_OUTPUT
-          echo "failed=${PATCH_FAILED}"   >> $GITHUB_OUTPUT
-
       - name: Build torch_npu wheel
         id: build
         run: |
@@ -171,17 +151,6 @@ jobs:
             STATUS_ICON="❌ FAILED"
           fi
 
-          # 处理 patch 显示
-          PATCH_APPLIED="${{ steps.patch.outputs.applied }}"
-          PATCH_FAILED="${{ steps.patch.outputs.failed }}"
-          if [ -n "${PATCH_APPLIED}" ]; then
-            PATCH_DISPLAY="${PATCH_APPLIED}"
-          elif [ -n "${PATCH_FAILED}" ]; then
-            PATCH_DISPLAY="(全部失败: ${PATCH_FAILED})"
-          else
-            PATCH_DISPLAY="(无 patch 文件)"
-          fi
-
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ## Ascend/pytorch Nightly Build Validation
 
@@ -191,7 +160,6 @@ jobs:
           | PyTorch Nightly | \`${{ steps.install_torch.outputs.version }}\` |
           | Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://github.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |
           | Commit 时间 | ${{ steps.clone_repo.outputs.commit_date }} |
-          | 已应用 Patch | ${PATCH_DISPLAY} |
           | ccache 命中率 | ${{ steps.build.outputs.hit_rate || 'N/A' }} |
           | 构建结果 | ${STATUS_ICON} |
 

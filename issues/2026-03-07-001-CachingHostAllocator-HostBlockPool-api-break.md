@@ -5,7 +5,6 @@
 - **严重级别**：🔴 编译失败（阻断构建）
 - **受影响文件**：`torch_npu/csrc/core/npu/CachingHostAllocator.cpp`
 - **触发版本**：PyTorch nightly ≥ 2026-03-07（具体构建待确认）
-- **对应 patch**：`patches/0001-fix-CachingHostAllocator-HostBlockPool-api-compat.patch`
 
 ---
 
@@ -75,9 +74,9 @@ make: *** [Makefile:136: all] Error 2
 
 ---
 
-## 修复方案
+## 修复建议
 
-见 `patches/0001-fix-CachingHostAllocator-HostBlockPool-api-compat.patch`，核心改动：
+核心改动：
 
 1. **重命名** `at_npu::native::BlockPool` → `at_npu::native::ExpandableBlockPool`，消除与继承 typedef 的名字冲突
 2. **更新** `process_events()` 为 `process_events(BlockPool& pool) override`，引入私有辅助方法 `do_process_npu_events()` 承载 NPU 事件处理逻辑

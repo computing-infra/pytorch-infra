@@ -7,8 +7,6 @@
   - `torch_npu/csrc/distributed/symm_mem/NPUSHMEMSymmetricMemory.cpp`
   - `torch_npu/csrc/distributed/symm_mem/NPUSHMEMSymmetricMemory.hpp`
 - **触发版本**：PyTorch nightly 2026-03-07
-- **对应 patch**：`patches/0002-fix-NPUSHMEMSymmetricMemory-GroupInfo-api-compat.patch`
-- **前置 patch**：`patches/0001-fix-CachingHostAllocator-HostBlockPool-api-compat.patch`（已应用，本次构建推进到 70% 后暴露此问题）
 
 ---
 
@@ -57,9 +55,9 @@ error: invalid new-expression of abstract class type 'c10d::symmetric_memory::NP
 
 ---
 
-## 修复方案
+## 修复建议
 
-见 `patches/0002-fix-NPUSHMEMSymmetricMemory-GroupInfo-api-compat.patch`，核心改动：
+核心改动：
 
 1. **`rank_to_global_rank` 缓存迁移**：在 `.cpp` 文件模块级别引入
    `static std::unordered_map<std::string, std::vector<int>> rank_to_global_rank_cache`（加 mutex 保护），
