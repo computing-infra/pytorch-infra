@@ -71,7 +71,7 @@ jobs:
         id: clone_repo
         run: |
           git clone --depth=1 --recurse-submodules \
-            https://github.com/Ascend/pytorch.git ascend_pytorch
+            https://gitcode.com/Ascend/pytorch.git ascend_pytorch
           cd ascend_pytorch
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
