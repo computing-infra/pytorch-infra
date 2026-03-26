@@ -35,20 +35,15 @@ git pull
 
 调用 Skill 工具执行 `analyze-failure`，分析最新失败的 CI 运行。
 
-## 步骤 3：根据分析结果判断是否需要创建 issue
+## 步骤 3：执行 report-issue
 
-- 如果分析结果显示**编译失败**，继续执行 `report-issue`
-- 如果分析结果显示**Workflow 脚本失败**，直接修复 `.github/workflows/*.yml`，无需创建 issue
-- 如果分析结果显示**依赖/网络问题**，记录问题但不创建 issue
-- 如果没有失败的 CI 运行，输出「无失败构建，跳过后续步骤」并结束
+调用 Skill 工具执行 `report-issue`。（该 skill 内部会判断失败类型，决定是否创建 issue 文件）
 
-## 步骤 4：执行 report-issue（仅编译失败时）
+**注意**：如果 `report-issue` 判断为 CI 脚本失败需要修复 workflow，应直接修复 `.github/workflows/*.yml`。
 
-调用 Skill 工具执行 `report-issue`，根据分析结果创建 issue 文档。
+## 步骤 4：执行 sync-issues
 
-## 步骤 5：执行 sync-issues（仅成功创建 issue 时）
-
-如果步骤 4 成功创建了新的 issue 文件，调用 Skill 工具执行 `sync-issues`，同步到 GitCode 平台。
+如果步骤 3 成功创建了新的 issue 文件，调用 Skill 工具执行 `sync-issues`，同步到 GitCode 平台。
 
 ---
 
