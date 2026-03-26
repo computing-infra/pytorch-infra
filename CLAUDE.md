@@ -50,7 +50,7 @@ git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
 ## 架构
 
 ### Workflow: `.github/workflows/nightly-build.yml`
-- **触发方式**：每日 UTC 02:00 自动触发，或通过 `workflow_dispatch` 手动触发
+- **触发方式**：每日 UTC 21:00（北京时间 05:00）自动触发，或通过 `workflow_dispatch` 手动触发
 - **运行环境**：`ubuntu-22.04`，Python 3.11
 - **构建流程**：
   1. 安装 PyTorch nightly（CPU 版）

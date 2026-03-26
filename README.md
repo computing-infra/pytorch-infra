@@ -1,10 +1,10 @@
-# pytorch-npu CI
+# pytorch-npu-codex
 
-每日自动验证 [Ascend/pytorch](https://github.com/Ascend/pytorch) 在 PyTorch 主干最新 nightly 版本下的编译兼容性。
+每日自动验证 [Ascend/pytorch](https://gitcode.com/Ascend/pytorch) 在 PyTorch 主干最新 nightly 版本下的编译兼容性。
 
 ## 工作原理
 
-- **触发方式**：每天 UTC 02:00（北京时间 10:00）自动触发，或手动触发
+- **触发方式**：每天 UTC 21:00（北京时间 05:00）自动触发，或手动触发
 - **运行环境**：GitHub Actions 免费 x86 runner（`ubuntu-22.04`）
 - **PyTorch 版本**：PyTorch 主干每日 nightly 构建（CPU 版）
 - **CANN 依赖**：无需安装 CANN，使用仓库内置的桩库（`third_party/acl/libs/build_stub.sh`）
@@ -44,7 +44,7 @@
 
 ## 问题处理（Claude Code Skills）
 
-本仓库内置两个 Claude Code slash commands，用于分析 CI 失败并记录问题。在项目目录下启动 Claude Code 后即可使用。
+本仓库内置三个 Claude Code slash commands，用于分析 CI 失败、记录问题并同步到 GitCode。在项目目录下启动 Claude Code 后即可使用。
 
 ### 典型工作流
 
@@ -53,7 +53,9 @@ CI 构建失败
   │
   ├─ /analyze-failure   ← 拉取日志、定位根因、对比 PyTorch 新旧 API
   │
-  └─ /report-issue      ← 按日期编号创建 issues/ 文档
+  ├─ /report-issue      ← 按日期编号创建 issues/ 文档
+  │
+  └─ /sync-issues       ← 同步到 GitCode 平台（kerer-sk/pytorch）
 ```
 
 ---
@@ -63,11 +65,11 @@ CI 构建失败
 CI 变红后的第一步。执行内容：
 
 1. `gh run list` 找到最新失败 Run
-2. `gh run view --log-failed` 拉取失败日志
-3. 过滤 `error:`、`make[2]`、`Traceback` 等关键行
-4. 读取受影响的 Ascend/pytorch 源文件
-5. 在 PyTorch nightly 头文件（`/usr/local/lib/python3.12/dist-packages/torch/include/`）中查找变更后的 API 定义
-6. 输出结构化报告：错误摘要、根本原因、受影响范围、建议修复方向
+2. 提取 PyTorch nightly 版本和 Ascend/pytorch commit id
+3. `gh run view --log-failed` 拉取失败日志
+4. 过滤 `error:`、`make[2]`、`Traceback` 等关键行
+5. 读取受影响的 Ascend/pytorch 源文件
+6. 输出结构化报告：版本信息、错误摘要、根本原因、受影响范围、建议修复方向
 
 ```
 /analyze-failure
@@ -81,13 +83,28 @@ CI 变红后的第一步。执行内容：
 
 ### `/report-issue` — 创建 issue 记录
 
-在 `/analyze-failure` 完成后使用。按 `YYYY-MM-DD-NNN` 规则编号，在 `issues/` 下创建 Markdown 文档，记录：问题描述、根本原因分析（含错误日志）、修复建议。
+在 `/analyze-failure` 完成后使用。按 `YYYY-MM-DD-NNN` 规则编号，在 `issues/` 下创建 Markdown 文档，记录：构建信息、版本信息、问题描述、错误摘要、根本原因、修复建议。
 
 ```
 /report-issue
 ```
 
-示例：`issues/2026-03-07-001-CachingHostAllocator-HostBlockPool-api-break.md`
+示例：`issues/2026-03-26-001-ProcessGroupHCCL-SocVersion-enum-error.md`
+
+---
+
+### `/sync-issues` — 同步到 GitCode
+
+将本地 `issues/` 目录同步到 GitCode 平台（`kerer-sk/pytorch` 仓库）。
+
+```
+/sync-issues
+```
+
+功能：
+- 语义相似度去重（受影响文件、错误类型、关键标识符）
+- 自动添加 `ai-analyze` 和 `nightly-ci` 标签
+- 本地文件添加 `gitcode_issue_id` 标记避免重复提交
 
 ---
 
