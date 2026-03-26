@@ -10,7 +10,7 @@ gitcode_issue_id: 3
 |------|------|
 | 发现日期 | 2026-03-26 |
 | 编号 | 2026-03-26-001 |
-| Action 链接 | https://github.com/kerer-ai/pytorch-npu/actions/runs/23579809499 |
+| Action 链接 | https://github.com/kerer-ai/pytorch-npu-codex/actions/runs/23579809499 |
 
 ## 版本信息
 

@@ -52,7 +52,7 @@ GitHub CLI 未登录或 token 已过期，请先执行：
 ### 第一步：找到最近的失败 Run
 
 ```bash
-gh run list --repo kerer-ai/pytorch-npu --limit 10
+gh run list --repo kerer-ai/pytorch-npu-codex --limit 10
 ```
 
 记录最新一条 `failure` 状态的 Run ID 和触发时间。
@@ -68,14 +68,14 @@ gh run list --repo kerer-ai/pytorch-npu --limit 10
 
 ```bash
 # 获取完整日志（包含成功步骤）
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log 2>&1 | head -500
+gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log 2>&1 | head -500
 
 # 提取 PyTorch nightly 版本
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log 2>&1 \
+gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log 2>&1 \
   | grep -E "PyTorch nightly version:" | head -1
 
 # 提取 Ascend/pytorch commit
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log 2>&1 \
+gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log 2>&1 \
   | grep -E "Ascend/pytorch commit:" | head -1
 ```
 
@@ -95,17 +95,17 @@ Ascend/pytorch commit: abc123def456 (2026-03-25 10:00:00 +0800)
 
 ```bash
 # 查看失败 Run 概览
-gh run view <run_id> --repo kerer-ai/pytorch-npu
+gh run view <run_id> --repo kerer-ai/pytorch-npu-codex
 
 # 获取失败日志
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 | head -300
+gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log-failed 2>&1 | head -300
 ```
 
 **判断失败类型：**
 
 ```bash
 # 检查各类失败特征
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
+gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log-failed 2>&1 \
   | grep -E "error:|make\[.*\]:|Invalid format|GITHUB_OUTPUT|Permission denied|exceeded the maximum|Unable to locate|Connection refused" \
   | head -30
 ```
@@ -121,7 +121,7 @@ gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
 #### A1. 提取关键错误
 
 ```bash
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
+gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log-failed 2>&1 \
   | grep -E "error:|fatal error|make\[|FAILED" \
   | head -50
 ```
@@ -163,7 +163,7 @@ Invalid format
 
 **检查方法：**
 ```bash
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
+gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log-failed 2>&1 \
   | grep -E "GITHUB_OUTPUT|echo.*>>" | head -30
 ```
 
@@ -201,7 +201,7 @@ ERROR: Could not find a version
 
 **检查方法：**
 ```bash
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
+gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log-failed 2>&1 \
   | grep -E "apt-get|pip install|E:|ERROR|Could not find" \
   | head -50
 ```
@@ -232,7 +232,7 @@ The job running on runner ... has exceeded the maximum execution time
 | 触发时间 | YYYY-MM-DD HH:MM UTC |
 | 运行时长 | XX 分钟 |
 | 失败类型 | 编译失败 / Workflow 脚本失败 / 依赖安装失败 / 超时 |
-| Action 链接 | https://github.com/kerer-ai/pytorch-npu/actions/runs/<run_id> |
+| Action 链接 | https://github.com/kerer-ai/pytorch-npu-codex/actions/runs/<run_id> |
 
 ### 版本信息
 | 项目 | 详情 |
