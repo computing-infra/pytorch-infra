@@ -67,7 +67,7 @@ ls issues/              # 查看当天已有几个 issue，确定序号（001、
 |------|------|
 | 发现日期 | YYYY-MM-DD |
 | 编号 | YYYY-MM-DD-NNN |
-| Action 链接 | https://github.com/kerer-ai/pytorch-npu-codex/actions/runs/<run_id> |
+| Action 链接 | https://github.com/computing-infra/pytorch-infra/actions/runs/<run_id> |
 
 ## 版本信息
 

@@ -1,4 +1,4 @@
-# pytorch-npu-codex
+# pytorch-infra
 
 每日自动验证 [Ascend/pytorch](https://gitcode.com/Ascend/pytorch) 在 PyTorch 主干最新 nightly 版本下的编译兼容性。
 

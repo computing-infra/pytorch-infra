@@ -23,13 +23,13 @@
 ### CI 操作
 ```bash
 # 查看最近的 CI 运行记录
-gh run list --repo kerer-ai/pytorch-npu-codex --limit 5
+gh run list --repo computing-infra/pytorch-infra --limit 5
 
 # 手动触发构建
-gh workflow run nightly-build.yml --repo kerer-ai/pytorch-npu-codex
+gh workflow run nightly-build.yml --repo computing-infra/pytorch-infra
 
 # 查看失败运行的日志
-gh run view <run_id> --repo kerer-ai/pytorch-npu-codex --log-failed
+gh run view <run_id> --repo computing-infra/pytorch-infra --log-failed
 ```
 
 ### 本地 Ascend/pytorch 克隆
