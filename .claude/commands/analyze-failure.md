@@ -1,13 +1,49 @@
 分析最新一次失败的 GitHub Actions CI 构建，自动判断失败类型并输出结构化报告。
 
+> **注意**：本项目仅进行问题分析和建议，不直接修复代码。
+
+---
+
+## 前置检查
+
+### 步骤 0：检查 GitHub CLI 登录状态
+
+**必须先验证 gh 命令可用且已登录，否则无法获取日志。**
+
+```bash
+gh auth status
+```
+
+**判断结果：**
+
+| 输出内容 | 状态 | 处理方式 |
+|----------|------|----------|
+| `Logged in to github.com` | ✅ 已登录 | 继续执行 |
+| `not logged in` | ❌ 未登录 | 提示用户运行 `gh auth login` |
+| `token expired` | ❌ token 过期 | 提示用户运行 `gh auth refresh` |
+| `command not found` | ❌ gh 未安装 | 提示用户安装 GitHub CLI |
+
+**如果未登录或过期，告知用户：**
+```
+GitHub CLI 未登录或 token 已过期，请先执行：
+  gh auth login
+或刷新 token：
+  gh auth refresh
+```
+
+---
+
 ## 失败类型判断
 
 执行诊断时，根据日志特征自动判断失败类型：
 
-| 类型 | 特征 | 诊断流程 |
-|------|------|----------|
-| **编译失败** | `error:`、`make[*]:`、C++ 错误 | → 编译诊断流程 |
-| **Workflow 脚本失败** | `Invalid format`、`GITHUB_OUTPUT`、权限、超时 | → Workflow 诊断流程 |
+| 类型 | 特征关键词 | 说明 |
+|------|------------|------|
+| **编译失败** | `error:`、`make[*]:`、`fatal error` | C++ 编译错误，通常是 API 不兼容 |
+| **Workflow 脚本失败** | `Invalid format`、`GITHUB_OUTPUT`、`Permission denied` | CI 脚本语法或配置问题 |
+| **依赖安装失败** | `E: Unable to locate package`、`pip install failed` | 系统包或 Python 包安装失败 |
+| **超时失败** | `exceeded the maximum execution time` | 构建时间过长 |
+| **网络问题** | `Connection refused`、`timed out`、`Could not resolve host` | 网络连接问题 |
 
 ---
 
@@ -16,108 +52,75 @@
 ### 第一步：找到最近的失败 Run
 
 ```bash
-gh run list --repo kerer-ai/pytorch-npu --limit 5
+gh run list --repo kerer-ai/pytorch-npu --limit 10
 ```
 
-记录最新一条 `failure` 状态的 Run ID 和触发时间。同时观察**构建进度**（运行时长）：
-- 时长很短（< 5 分钟）→ 失败在早期步骤（依赖安装、workflow 语法等）
-- 时长较长（> 30 分钟）→ 编译阶段失败，说明前序步骤均已通过
+记录最新一条 `failure` 状态的 Run ID 和触发时间。
+
+**构建进度判断（运行时长）：**
+- `< 2 分钟` → 早期失败（checkout、依赖安装、gh 登录问题）
+- `2-10 分钟` → 中期失败（PyTorch 安装、代码克隆）
+- `> 30 分钟` → 编译阶段失败（API 不兼容）
 
 ### 第二步：拉取失败日志并判断类型
 
 ```bash
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 | head -200
+# 查看失败 Run 概览
+gh run view <run_id> --repo kerer-ai/pytorch-npu
+
+# 获取失败日志
+gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 | head -300
 ```
 
 **判断失败类型：**
 
 ```bash
-# 检查是否为 workflow 脚本问题
+# 检查各类失败特征
 gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
-  | grep -E "Unable to process file command|Invalid format|GITHUB_OUTPUT|Permission denied|exceeded the maximum" \
-  | head -20
+  | grep -E "error:|make\[.*\]:|Invalid format|GITHUB_OUTPUT|Permission denied|exceeded the maximum|Unable to locate|Connection refused" \
+  | head -30
 ```
 
-- **有匹配** → Workflow 脚本失败，执行 [Workflow 诊断流程](#workflow-诊断流程)
-- **无匹配** → 编译失败，执行 [编译诊断流程](#编译诊断流程)
+根据匹配的关键词，选择对应的诊断流程。
 
 ---
 
-## 编译诊断流程
+## 诊断流程
 
-### C1. 过滤关键错误行
+### A. 编译失败诊断
+
+#### A1. 提取关键错误
 
 ```bash
 gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
-  | grep -E "error:|Error|FAILED|fatal|Traceback|make\[|Applying patch|✅|❌" \
-  | head -100
+  | grep -E "error:|fatal error|make\[|FAILED" \
+  | head -50
 ```
 
-重点关注：
-- `make[2]: *** [...] Error 1` → 定位到具体编译失败的 `.cpp` 文件
-- `error: 'struct X' has no member named 'Y'` → 结构体成员被上游删除或重命名
-- `error: 'Z' marked 'override', but does not override` → 虚函数签名变更
-- `error: invalid new-expression of abstract class type` → 基类新增纯虚函数未实现
-- `✅ OK` / `❌ FAILED` → 哪些 patch 成功打入，哪些失败
+#### A2. 常见编译错误类型
 
-### C2. 定位受影响源文件，对比新旧 API
+| 错误模式 | 含义 | 常见原因 |
+|----------|------|----------|
+| `'struct X' has no member named 'Y'` | 结构体成员不存在 | 上游删除或重命名了字段 |
+| `'Z' marked 'override', but does not override` | 虚函数签名变更 | 上游修改了函数签名 |
+| `invalid new-expression of abstract class type` | 抽象类无法实例化 | 基类新增纯虚函数未实现 |
+| `no matching function for call to 'X'` | 函数调用不匹配 | 函数签名变更或重载消失 |
+| `use of undeclared identifier 'X'` | 标识符未声明 | 头文件路径变更或宏定义变化 |
+| `'X' is not a member of 'Y'` | 枚举/命名空间成员不存在 | 枚举值被删除或重命名 |
 
-确认失败的 `.cpp` / `.hpp` 文件后，读取对应源码：
+#### A3. 定位源文件
 
 ```bash
-# 读取 Ascend/pytorch 源文件（使用本地克隆）
-cat /root/ascend_pytorch_tmp/<受影响文件路径>
+# 本地克隆源码（若不存在）
+git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
+
+# 查看受影响文件
+cat .tmp/ascend_pytorch/<受影响文件路径>
 ```
 
-然后在 PyTorch nightly 安装的头文件中查找对应的新 API：
+### B. Workflow 脚本失败诊断
 
-```bash
-TORCH_INCLUDE=$(python3 -c "import torch,os; print(os.path.dirname(torch.__file__))")/include
-# 按关键词搜索相关头文件
-grep -rn "<变更的类名或函数名>" $TORCH_INCLUDE --include="*.h" | head -20
-# 读取具体头文件
-cat $TORCH_INCLUDE/<相关头文件路径>
-```
-
-### C3. 输出编译诊断报告
-
-```
-## 失败 Run 信息
-- Run ID：
-- 触发时间：
-- 失败类型：编译失败
-- 构建进度：（已通过 patch 数量 / 失败所在阶段）
-
-## 已生效的 Patch
-（列出 ✅ OK 的 patch，说明本次构建在哪些修复的基础上推进）
-
-## 错误摘要
-（3-5 条最关键的编译错误原文）
-
-## 根本原因
-（说明是哪个 PyTorch 上游 API 变化导致失败：结构体字段删除 / 函数签名变更 / 新增纯虚函数 等）
-
-## 受影响范围
-- 文件：（相对于 Ascend/pytorch 根目录的路径）
-- 涉及类/函数：
-
-## 建议修复方向
-（最小改动原则：如何调整 Ascend 侧代码适配新 API）
-```
-
----
-
-## Workflow 诊断流程
-
-### W1. 确定失败步骤
-
-```bash
-gh run view <run_id> --repo kerer-ai/pytorch-npu
-```
-
-### W2. 分类诊断
-
-#### W2.1 输出格式错误
+#### B1. 输出格式错误
 
 **特征：**
 ```
@@ -127,32 +130,15 @@ Invalid format
 
 **常见原因：**
 - 多行文本直接写入 `$GITHUB_OUTPUT`
-- 输出值包含特殊字符
+- 输出值包含特殊字符（`}`、`|`、换行）
 
 **检查方法：**
 ```bash
 gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
-  | grep -E "GITHUB_OUTPUT|echo.*>>" \
-  | head -30
+  | grep -E "GITHUB_OUTPUT|echo.*>>" | head -30
 ```
 
-**修复建议：** 使用 heredoc 格式输出多行，或只输出单行值
-
-#### W2.2 表达式错误
-
-**特征：**
-```
-Unrecognized named-value: 'xxx'
-Property 'xxx' is required
-The expression is not valid
-```
-
-**检查方法：** 查看 workflow 文件中的表达式
-```bash
-grep -n "\${{" .github/workflows/nightly-build.yml
-```
-
-#### W2.3 权限问题
+#### B2. 权限问题
 
 **特征：**
 ```
@@ -160,109 +146,133 @@ Permission denied
 Error: Resource not accessible by integration
 ```
 
-**修复建议：** 添加 `permissions` 块
-```yaml
-permissions:
-  contents: read
-  actions: write
+**检查方法：** 查看 workflow 中的 `permissions` 配置
+
+#### B3. 表达式错误
+
+**特征：**
+```
+Unrecognized named-value: 'xxx'
+The expression is not valid
 ```
 
-#### W2.4 超时
+**检查方法：**
+```bash
+grep -n "\${{" .github/workflows/nightly-build.yml
+```
+
+### C. 依赖安装失败诊断
+
+**特征：**
+```
+E: Unable to locate package
+pip install failed
+ERROR: Could not find a version
+```
+
+**检查方法：**
+```bash
+gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
+  | grep -E "apt-get|pip install|E:|ERROR|Could not find" \
+  | head -50
+```
+
+### D. 超时失败诊断
 
 **特征：**
 ```
 The job running on runner ... has exceeded the maximum execution time
 ```
 
-**修复建议：** 增加超时时间或优化构建步骤
+**分析要点：**
+- 检查是否有无限循环或死锁
+- 检查编译并行数是否合理
+- 考虑增加 `timeout-minutes`
 
-#### W2.5 依赖安装失败
+---
 
-**特征：**
-```
-E: Unable to locate package
-pip install failed
-```
-
-**检查方法：**
-```bash
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
-  | grep -E "apt-get|pip install|E:|ERROR" \
-  | head -50
-```
-
-#### W2.6 缓存/Artifact 问题
-
-**特征：**
-```
-Unable to restore cache
-Cache save failed
-Unable to upload artifact
-No files were found
-```
-
-**检查方法：**
-```bash
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
-  | grep -E "cache|Cache|ccache|artifact" \
-  | head -30
-```
-
-### W3. 输出 Workflow 诊断报告
+## 输出报告模板
 
 ```
-## 失败 Run 信息
-- Run ID：
-- 失败 Step：
-- 触发时间：
-- 失败类型：Workflow 脚本失败
+## CI 失败分析报告
 
-## 错误类型
-（输出格式错误 / 表达式错误 / 权限问题 / 超时 / 依赖安装 / 缓存 / Artifact）
+### 失败 Run 信息
+- Run ID：`<run_id>`
+- 触发时间：YYYY-MM-DD HH:MM UTC
+- 运行时长：XX 分钟
+- 失败类型：编译失败 / Workflow 脚本失败 / 依赖安装失败 / 超时
 
-## 错误摘要
-（关键错误日志原文）
+### 失败 Step
+- Step 名称：`<step_name>`
+- 失败原因概述：
 
-## 根本原因
-（说明 workflow 中哪个配置或写法导致失败）
+### 错误摘要
+```
+<关键错误日志原文，3-5 条>
+```
 
-## 修复建议
-1. 具体修改点（文件:行号）
-2. 修改内容
+### 根本原因
+（说明是什么导致了失败）
 
-## 相关文件
-- `.github/workflows/nightly-build.yml` 第 X 行
+### 受影响范围
+- 文件：`<相对路径>`
+- 涉及类/函数：
+
+### 建议修复方向
+1. 具体建议
+2. 注意事项
+
+### 后续操作
+- 编译失败 → `/report-issue` 创建 issue 文档
+- Workflow 失败 → 直接修改 `.github/workflows/*.yml`
 ```
 
 ---
 
-## 常见修复模式
+## 常见失败类型速查表
 
-| 问题类型 | 修复方式 |
-|----------|----------|
-| 多行写入 GITHUB_OUTPUT | 改用 heredoc 或输出单行 |
-| 引用不存在的 output | 检查 step id 和 output 名称拼写 |
-| 权限不足 | 添加 `permissions` 块 |
-| 缓存 key 冲突 | 调整 key 格式，加入日期或 run_id |
-| 路径不存在 | 检查相对路径，使用 `ls` 调试 |
+### 编译失败
+
+| 错误类型 | 典型日志 | 建议方向 |
+|----------|----------|----------|
+| API 删除 | `has no member named` | 查找替代 API 或更新调用方式 |
+| 签名变更 | `marked 'override', but does not override` | 更新函数签名匹配上游 |
+| 新增纯虚函数 | `abstract class type` | 实现缺失的虚函数 |
+| 枚举值删除 | `is not a member of` | 使用新枚举值或添加映射 |
+
+### Workflow 失败
+
+| 问题类型 | 典型日志 | 建议方向 |
+|----------|----------|----------|
+| 多行输出 | `Invalid format` | 使用 heredoc 格式 |
+| 权限不足 | `Permission denied` | 添加 `permissions` 块 |
+| 表达式错误 | `Unrecognized named-value` | 检查变量拼写和作用域 |
+| 缓存失败 | `Unable to restore cache` | 调整缓存 key 格式 |
+
+### 环境/网络失败
+
+| 问题类型 | 典型日志 | 建议方向 |
+|----------|----------|----------|
+| 包不存在 | `Unable to locate package` | 检查包名或换源 |
+| 网络超时 | `Connection timed out` | 重试或使用镜像 |
+| 磁盘满 | `No space left on device` | 清理或扩容 |
 
 ---
 
 ## 后续操作指引
 
-根据失败类型，建议后续操作：
-
 | 失败类型 | 后续操作 |
 |----------|----------|
 | **编译失败** | 运行 `/report-issue` 创建 issue 文档 |
-| **Workflow 脚本失败** | 直接修复 `.github/workflows/*.yml`，通常不需要创建 issue |
+| **Workflow 脚本失败** | 直接修复 `.github/workflows/*.yml` |
+| **依赖/网络问题** | 检查外部服务状态，必要时重试 |
 
 ---
 
 ## 注意事项
 
-- 若日志量大（> 40 KB），`grep` 过滤后重点看 `make[2]` 和第一个 `error:` 出现的位置
+- 若日志量大（> 40 KB），`grep` 过滤后重点看第一个 `error:` 出现的位置
 - 若日志显示 wheel 已成功生成，但 step 仍失败，优先判断为 CI 脚本问题
 - 每次编译失败通常只暴露**当前最早的**错误，修完一个后下次构建才会暴露下一个
-- 本地克隆路径：`/root/ascend_pytorch_tmp`
+- 本地克隆路径：`.tmp/ascend_pytorch`
 - PyTorch nightly 头文件路径：`/usr/local/lib/python3.12/dist-packages/torch/include/`
