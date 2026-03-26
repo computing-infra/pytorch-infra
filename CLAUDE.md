@@ -8,7 +8,7 @@
 
 ### 核心定位
 - **每日集成**：自动拉取 PyTorch nightly 和 Ascend/pytorch 最新代码进行编译验证
-- **问题追踪**：CI 失败时，使用 `/analyze-failure` 分析错误、`/report-issue` 生成 issue 文档
+- **问题追踪**：CI 失败时，使用 `/analyze-failure` 分析错误并创建 issue
 - **修复建议**：输出根本原因分析和修复建议，但**不需要直接修复或生成 patch**
 
 ### 工作边界
@@ -66,17 +66,17 @@ git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
 
 | 命令 | 用途 |
 |------|------|
-| `/analyze-failure` | 分析最新失败的 CI 运行，自动判断失败类型，输出版本信息和结构化报告 |
-| `/report-issue` | 根据 CI 结果管理 issue：失败时创建，成功时关闭已修复的 |
+| `/analyze-failure` | 分析最新 CI 构建：失败时创建 issue，成功时关闭已修复的 issue |
 | `/sync-issues` | 将 GitHub issue 同步到 GitCode（`kerer-sk/pytorch`） |
-| `/scheduled-ci-analysis` | 创建每日定时 CI 分析任务（北京时间 08:00），自动执行完整分析流程 |
+| `/scheduled-ci-analysis` | 创建每日定时 CI 分析任务（北京时间 08:00） |
 
 ### 典型工作流
 ```
-CI 失败 → /analyze-failure
-              ├─ 编译失败 → /report-issue → GitHub issue
-              │                        → /sync-issues → GitCode issue
-              └─ Workflow 脚本失败 → 直接修复 .github/workflows/*.yml
+/analyze-failure
+    │
+    ├─ ❌ 构建失败 → 分析原因 → 创建 GitHub issue → /sync-issues → GitCode issue
+    │
+    └─ ✅ 构建成功 → 检查 open issue → 关闭已修复的 issue
 ```
 
 ## CI 脚本注意事项
