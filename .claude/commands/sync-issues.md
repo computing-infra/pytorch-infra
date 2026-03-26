@@ -1,4 +1,4 @@
-将本地 `issues/` 目录下的 issue 文档同步提交到 GitCode 平台（`kerer-sk/pytorch` 仓库）。
+将本地 `issues/` 目录下的 issue 文档同步提交到 GitCode 平台（`Ascend/pytorch` 仓库）。
 
 ---
 
@@ -48,7 +48,7 @@ ls issues/*.md
 **获取远程 issue 列表用于去重检查：**
 
 ```bash
-gc issue list -R kerer-sk/pytorch --limit 100
+gc issue list -R Ascend/pytorch --limit 100
 ```
 
 解析输出，提取所有已存在的 issue 标题列表 `remote_titles[]`。
@@ -122,15 +122,15 @@ gitcode_issue_id: 123
 **步骤 1：创建 issue**
 
 ```bash
-gc issue create -R kerer-sk/pytorch \
+gc issue create -R Ascend/pytorch \
   --title "[Bug] <title>" \
   --body "$(cat <file_path>)"
 ```
 
 输出示例：
 ```
-✓ Created issue #123 in kerer-sk/pytorch
-  https://gitcode.com/kerer-sk/pytorch/issues/123
+✓ Created issue #123 in Ascend/pytorch
+  https://gitcode.com/Ascend/pytorch/issues/123
 ```
 
 **步骤 2：添加标签**
@@ -138,7 +138,7 @@ gc issue create -R kerer-sk/pytorch \
 从输出提取 issue 编号后，添加标签：
 
 ```bash
-gc issue label <issue_number> --add ai-analyze,nightly-ci,bug -R kerer-sk/pytorch
+gc issue label <issue_number> --add ai-analyze,nightly-ci,bug -R Ascend/pytorch
 ```
 
 输出示例：
@@ -151,7 +151,7 @@ gc issue label <issue_number> --add ai-analyze,nightly-ci,bug -R kerer-sk/pytorc
 创建成功后，gc 会输出新 issue 的 URL 和编号：
 
 ```
-https://gitcode.com/kerer-sk/pytorch/issues/123
+https://gitcode.com/Ascend/pytorch/issues/123
 ```
 
 提取 issue ID（如 `123`），更新本地文件，在开头添加 frontmatter：
@@ -193,7 +193,7 @@ git push
 
 ### 新建 issues
 - #123: [2026-03-26-001] ProcessGroupHCCL 引用不存在的 SocVersion 枚举值
-  https://gitcode.com/kerer-sk/pytorch/issues/123
+  https://gitcode.com/Ascend/pytorch/issues/123
 
 ### 跳过（已同步）
 - issues/2026-03-07-001-xxx.md → #456
@@ -241,7 +241,7 @@ git push
 
 - **正文内容**：使用文件全部内容作为 body，包括标题行
 - **标签**：所有 issue 统一添加 `ai-analyze`、`nightly-ci` 和 `bug` 三个标签
-- **目标仓库**：固定为 `kerer-sk/pytorch`
+- **目标仓库**：固定为 `Ascend/pytorch`
 - **本地文件更新**：同步成功后必须更新本地文件添加 `gitcode_issue_id`，避免重复提交
 
 ---
