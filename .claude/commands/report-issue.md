@@ -3,7 +3,17 @@
 ## 前置条件
 
 需要已知以下信息（通常来自 `/analyze-failure` 的输出）：
-- 失败日期、受影响文件、API 变化详情、错误摘要
+
+**构建信息：**
+- Run ID、触发时间、运行时长
+- Action 链接
+
+**版本信息：**
+- PyTorch nightly 版本号（如 `2.12.0.dev20260325+cpu`）
+- Ascend/pytorch commit id 及提交时间（如 `b703a1a199e85347779124217f2330064f7fc284`）
+
+**失败信息：**
+- 受影响文件、API 变化详情、错误摘要
 
 如果上述信息不明确，先运行 `/analyze-failure`。
 
@@ -51,13 +61,21 @@ ls issues/              # 查看当天已有几个 issue，确定序号（001、
 ```markdown
 # [YYYY-MM-DD-NNN] <问题标题（含受影响类/文件名）>
 
-- **发现日期**：YYYY-MM-DD
-- **编号**：YYYY-MM-DD-NNN
-- **严重级别**：🔴 编译失败 / 🟡 编译警告 / 🟢 运行时问题
-- **受影响文件**：
-  - `相对/路径/文件1.cpp`
-  - `相对/路径/文件2.hpp`（如有）
-- **触发版本**：PyTorch nightly YYYY-MM-DD
+## 构建信息
+
+| 项目 | 详情 |
+|------|------|
+| 发现日期 | YYYY-MM-DD |
+| 编号 | YYYY-MM-DD-NNN |
+| Action 链接 | https://github.com/kerer-ai/pytorch-npu/actions/runs/<run_id> |
+
+## 版本信息
+
+| 项目 | 详情 |
+|------|------|
+| PyTorch Nightly | `2.11.0.devYYYYMMDD` |
+| Ascend/pytorch Commit | `abc123def456` (YYYY-MM-DD) |
+| Commit 链接 | https://gitcode.com/Ascend/pytorch/commit/abc123def456 |
 
 ---
 
@@ -67,29 +85,31 @@ ls issues/              # 查看当天已有几个 issue，确定序号（001、
 
 ---
 
-## 根本原因分析
+## 错误摘要
 
-### 1. <原因标题>
-
-（说明 PyTorch 上游做了什么改动，Ascend 侧依赖了哪个已删除/变更的接口）
-
-关键错误日志：
 \```
-error: 'struct X' has no member named 'Y'
+<关键错误日志原文，3-5 条>
 \```
-
-### 2. <原因标题>（如有多个独立原因）
-
-（同上）
 
 ---
 
-## 修复方案
+## 根本原因
 
-建议的修复方式：
+（说明是什么导致了失败，PyTorch 上游做了什么改动，Ascend 侧依赖了哪个已删除/变更的接口）
 
-1. **改动1**：（说明需要做什么改动）
-2. **改动2**：（同上）
+---
+
+## 受影响范围
+
+- **文件**：`<相对路径>`
+- **涉及类/函数**：
+
+---
+
+## 建议修复方向
+
+1. 具体建议
+2. 注意事项
 
 > **注意**：此问题需在 Ascend/pytorch 上游仓库修复，本项目仅进行每日验证。
 ```

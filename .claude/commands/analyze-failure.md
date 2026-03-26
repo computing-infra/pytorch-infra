@@ -62,7 +62,36 @@ gh run list --repo kerer-ai/pytorch-npu --limit 10
 - `2-10 分钟` → 中期失败（PyTorch 安装、代码克隆）
 - `> 30 分钟` → 编译阶段失败（API 不兼容）
 
-### 第二步：拉取失败日志并判断类型
+### 第二步：提取版本信息
+
+**从构建日志中提取 PyTorch nightly 版本和 Ascend/pytorch commit id：**
+
+```bash
+# 获取完整日志（包含成功步骤）
+gh run view <run_id> --repo kerer-ai/pytorch-npu --log 2>&1 | head -500
+
+# 提取 PyTorch nightly 版本
+gh run view <run_id> --repo kerer-ai/pytorch-npu --log 2>&1 \
+  | grep -E "PyTorch nightly version:" | head -1
+
+# 提取 Ascend/pytorch commit
+gh run view <run_id> --repo kerer-ai/pytorch-npu --log 2>&1 \
+  | grep -E "Ascend/pytorch commit:" | head -1
+```
+
+**输出示例：**
+```
+PyTorch nightly version: 2.11.0.dev20260326
+Ascend/pytorch commit: abc123def456 (2026-03-25 10:00:00 +0800)
+```
+
+**记录以下信息：**
+- `torch_version`：PyTorch nightly 版本号
+- `ascend_commit`：Ascend/pytorch 完整 commit hash
+- `ascend_commit_short`：Ascend/pytorch 短 commit hash
+- `ascend_commit_date`：Ascend/pytorch commit 时间
+
+### 第三步：拉取失败日志并判断类型
 
 ```bash
 # 查看失败 Run 概览
@@ -196,11 +225,21 @@ The job running on runner ... has exceeded the maximum execution time
 ```
 ## CI 失败分析报告
 
-### 失败 Run 信息
-- Run ID：`<run_id>`
-- 触发时间：YYYY-MM-DD HH:MM UTC
-- 运行时长：XX 分钟
-- 失败类型：编译失败 / Workflow 脚本失败 / 依赖安装失败 / 超时
+### 构建信息
+| 项目 | 详情 |
+|------|------|
+| Run ID | `<run_id>` |
+| 触发时间 | YYYY-MM-DD HH:MM UTC |
+| 运行时长 | XX 分钟 |
+| 失败类型 | 编译失败 / Workflow 脚本失败 / 依赖安装失败 / 超时 |
+| Action 链接 | https://github.com/kerer-ai/pytorch-npu/actions/runs/<run_id> |
+
+### 版本信息
+| 项目 | 详情 |
+|------|------|
+| PyTorch Nightly | `2.11.0.dev20260326` |
+| Ascend/pytorch Commit | `abc123def456` (2026-03-25) |
+| Commit 链接 | https://gitcode.com/Ascend/pytorch/commit/abc123def456 |
 
 ### 失败 Step
 - Step 名称：`<step_name>`
