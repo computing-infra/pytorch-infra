@@ -32,14 +32,34 @@ gh workflow run nightly-build.yml --repo computing-infra/pytorch-infra
 gh run view <run_id> --repo computing-infra/pytorch-infra --log-failed
 ```
 
-### 本地 Ascend/pytorch 克隆
-```bash
-# 源码分析用的克隆路径（在项目 .tmp/ 目录下）
-.tmp/ascend_pytorch
+### 本地 Ascend/pytorch 源码分析
 
-# 若不存在则克隆
-git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
+源码路径：`.tmp/ascend_pytorch`
+
+**按 CI 构建 commit 切换源码：**
+
+```bash
+# 1. 从 CI 日志提取 commit id
+gh run view <run_id> --repo computing-infra/pytorch-infra --log 2>&1 \
+  | grep -E "Ascend/pytorch commit:" | head -1
+
+# 2. 切换到对应 commit（源码已存在）
+if [ -d ".tmp/ascend_pytorch" ]; then
+  cd .tmp/ascend_pytorch
+  git fetch --depth=1 origin ${ASCEND_COMMIT}
+  git checkout ${ASCEND_COMMIT}
+  cd -
+# 或克隆新仓库（源码不存在）
+else
+  git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
+  cd .tmp/ascend_pytorch
+  git fetch --depth=1 origin ${ASCEND_COMMIT}
+  git checkout ${ASCEND_COMMIT}
+  cd -
+fi
 ```
+
+**说明**：CI 每次构建使用特定 commit，分析时必须切换到对应版本才能准确定位问题。
 
 ### PyTorch Nightly 头文件
 ```bash
