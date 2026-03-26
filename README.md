@@ -1,120 +1,45 @@
 # pytorch-infra
 
-每日自动验证 [Ascend/pytorch](https://gitcode.com/Ascend/pytorch) 在 PyTorch 主干最新 nightly 版本下的编译兼容性。
+每日自动验证 [Ascend/pytorch](https://gitcode.com/Ascend/pytorch) 与 PyTorch nightly 版本的编译兼容性。
 
-## 工作原理
-
-- **触发方式**：每天 UTC 21:00（北京时间 05:00）自动触发，或手动触发
-- **运行环境**：GitHub Actions 免费 x86 runner（`ubuntu-22.04`）
-- **PyTorch 版本**：PyTorch 主干每日 nightly 构建（CPU 版）
-- **CANN 依赖**：无需安装 CANN，使用仓库内置的桩库（`third_party/acl/libs/build_stub.sh`）
-
-## 构建流程
-
-1. 安装 PyTorch nightly（从 `download.pytorch.org/whl/nightly/cpu`）
-2. 克隆 `Ascend/pytorch`（含 `op-plugin` 子模块）
-3. 编译 CANN 桩库（`build_stub.sh`，仅需 GCC）
-4. 执行 `python setup.py build bdist_wheel`
-5. 上传构建日志和生成的 wheel 包
-
-## 当前 CI 策略（2026-03-08 更新）
-
-- 默认启用 torchair：`DISABLE_INSTALL_TORCHAIR=FALSE`
-- 不再强制禁用 RPC：不设置 `DISABLE_RPC_FRAMEWORK=TRUE`
-- 启用 `ccache`：构建前 `restore`，构建后 `save`
-- Step Summary 额外输出 `ccache` 命中状态与命中率
-
-## 查看结果
-
-- [Actions 页面](../../actions/workflows/nightly-build.yml) 查看每次构建状态
-- 每次运行的 Step Summary 包含 PyTorch 版本、Ascend/pytorch commit 和构建结果
-- 构建失败时可下载 `build-log` artifact 查看详细编译错误
-
-### 结果判读要点
-
-- `Build torch_npu wheel` 成功且出现 `Build succeeded: dist/*.whl`，说明核心编译成功。
-- 如果同一 step 最后报 `Unable to process file command 'output'` / `Invalid format`，通常是 workflow 输出写法错误（`$GITHUB_OUTPUT` 格式）而非编译错误。
-- `ccache` 首次冷启动命中率低属正常；第二次开始命中率应显著提升（本仓库实测从 `0.16%` 提升到 `99.76%`）。
-
-## 手动触发
-
-在 Actions 页面点击 **Run workflow**，可选填 PyTorch nightly 日期（格式 `YYYYMMDD`），留空使用最新版。
-
----
-
-## 问题处理（Claude Code Skills）
-
-本仓库内置三个 Claude Code slash commands，用于分析 CI 失败、记录问题并同步到 GitCode。在项目目录下启动 Claude Code 后即可使用。
-
-### 典型工作流
+## Workflow 流程
 
 ```
-CI 构建失败
-  │
-  ├─ /analyze-failure   ← 拉取日志、定位根因、对比 PyTorch 新旧 API
-  │
-  ├─ /report-issue      ← 按日期编号创建 issues/ 文档
-  │
-  └─ /sync-issues       ← 同步到 GitCode 平台（kerer-sk/pytorch）
+每日 UTC 21:00（北京时间 05:00）自动触发
+            │
+            ▼
+┌─────────────────────────────────┐
+│  1. 安装 PyTorch nightly (CPU)   │
+│  2. 克隆 Ascend/pytorch + 子模块 │
+│  3. 编译 CANN 桩库               │
+│  4. 构建 torch_npu wheel         │
+│  5. 上传构建产物                  │
+└─────────────────────────────────┘
+            │
+            ▼
+      构建结果通知
 ```
 
----
+**关键特性：**
+- **无 CANN 依赖**：使用内置桩库编译，仅需 GCC
+- **ccache 加速**：二次构建命中率 ~99%
+- **手动触发**：Actions 页面点击 **Run workflow**，可选指定 PyTorch nightly 日期
 
-### `/analyze-failure` — 分析 CI 失败原因
+## 构建结果
 
-CI 变红后的第一步。执行内容：
+| 状态 | 说明 |
+|------|------|
+| ✅ 成功 | 生成 `dist/*.whl`，可下载 |
+| ❌ 失败 | 下载 `build-log` artifact 查看编译错误 |
 
-1. `gh run list` 找到最新失败 Run
-2. 提取 PyTorch nightly 版本和 Ascend/pytorch commit id
-3. `gh run view --log-failed` 拉取失败日志
-4. 过滤 `error:`、`make[2]`、`Traceback` 等关键行
-5. 读取受影响的 Ascend/pytorch 源文件
-6. 输出结构化报告：版本信息、错误摘要、根本原因、受影响范围、建议修复方向
+## 问题分析工具
 
-```
-/analyze-failure
-```
+本仓库内置 Claude Code slash commands，用于分析 CI 失败：
 
-**关键观察**：先区分”真实编译失败”与”CI 脚本失败”：
-- 编译失败：`error:` / `make[2]: ***` / `FAILED` 等 C/C++ 错误
-- 脚本失败：`Unable to process file command 'output'`、`Invalid format`、`set-output`/`GITHUB_OUTPUT` 相关报错
+| 命令 | 用途 |
+|------|------|
+| `/analyze-failure` | 拉取日志、定位根因、输出结构化报告 |
+| `/report-issue` | 创建 issue 文档记录问题 |
+| `/sync-issues` | 同步到 GitCode 平台 |
 
----
-
-### `/report-issue` — 创建 issue 记录
-
-在 `/analyze-failure` 完成后使用。按 `YYYY-MM-DD-NNN` 规则编号，在 `issues/` 下创建 Markdown 文档，记录：构建信息、版本信息、问题描述、错误摘要、根本原因、修复建议。
-
-```
-/report-issue
-```
-
-示例：`issues/2026-03-26-001-ProcessGroupHCCL-SocVersion-enum-error.md`
-
----
-
-### `/sync-issues` — 同步到 GitCode
-
-将本地 `issues/` 目录同步到 GitCode 平台（`kerer-sk/pytorch` 仓库）。
-
-```
-/sync-issues
-```
-
-功能：
-- 语义相似度去重（受影响文件、错误类型、关键标识符）
-- 自动添加 `ai-analyze` 和 `nightly-ci` 标签
-- 本地文件添加 `gitcode_issue_id` 标记避免重复提交
-
----
-
-## ccache 经验沉淀
-
-- 在本仓库场景下，`ccache` 对重复构建有效，建议保留。
-- 推荐至少保留以下环境变量：
-  - `CC="ccache gcc"`
-  - `CXX="ccache g++"`
-  - `CCACHE_DIR=~/.ccache`
-  - `CCACHE_MAXSIZE=2G`
-- 不要把多行文本直接写入 `$GITHUB_OUTPUT`（会触发格式错误并导致 step 失败）。
-  - 建议输出单行指标（如 `hit_rate=99.76 %`）。
+**典型流程：** CI 失败 → `/analyze-failure` → `/report-issue` → `/sync-issues`
