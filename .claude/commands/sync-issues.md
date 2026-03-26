@@ -1,4 +1,4 @@
-将 GitHub 仓库的 issue 同步到 GitCode 平台（`Ascend/pytorch` 仓库）。
+将 GitHub 仓库的 issue 同步到 GitCode 平台（`kerer-sk/pytorch` 仓库）。
 
 ---
 
@@ -34,7 +34,7 @@ gh issue list -R computing-infra/pytorch-infra --limit 50
 ### 第二步：获取 GitCode issue 列表
 
 ```bash
-gc issue list -R Ascend/pytorch --limit 100
+gc issue list -R kerer-sk/pytorch --limit 100
 ```
 
 解析输出，用于去重检查。
@@ -50,7 +50,7 @@ gc issue list -R Ascend/pytorch --limit 100
 读取 GitHub issue body，检查是否包含标记：
 
 ```
-GitCode: https://gitcode.com/Ascend/pytorch/issues/123
+GitCode: https://gitcode.com/kerer-sk/pytorch/issues/123
 ```
 
 - **已包含 GitCode 链接**：跳过
@@ -71,7 +71,7 @@ GitCode: https://gitcode.com/Ascend/pytorch/issues/123
 #### 3.3 创建 GitCode issue
 
 ```bash
-gc issue create -R Ascend/pytorch \
+gc issue create -R kerer-sk/pytorch \
   --title "<title>" \
   --body "$(cat <<'EOF'
 <GitHub issue body>
@@ -85,7 +85,7 @@ EOF
 #### 3.4 添加标签
 
 ```bash
-gc issue label <issue_number> --add ai-analyze,nightly-ci,bug -R Ascend/pytorch
+gc issue label <issue_number> --add ai-analyze,nightly-ci,bug -R kerer-sk/pytorch
 ```
 
 #### 3.5 更新 GitHub issue
@@ -98,7 +98,7 @@ gh issue edit <gh_issue_id> -R computing-infra/pytorch-infra \
 <原有内容>
 
 ---
-GitCode: https://gitcode.com/Ascend/pytorch/issues/<gitcode_issue_id>
+GitCode: https://gitcode.com/kerer-sk/pytorch/issues/<gitcode_issue_id>
 EOF
 )"
 ```
@@ -116,7 +116,7 @@ EOF
 
 ### 新建 issues
 - GH #123 → GitCode #456
-  https://gitcode.com/Ascend/pytorch/issues/456
+  https://gitcode.com/kerer-sk/pytorch/issues/456
 ```
 
 ---

@@ -68,7 +68,7 @@ git clone --depth=1 https://gitcode.com/Ascend/pytorch.git .tmp/ascend_pytorch
 |------|------|
 | `/analyze-failure` | 分析最新失败的 CI 运行，自动判断失败类型，输出版本信息和结构化报告 |
 | `/report-issue` | 根据 CI 结果管理 issue：失败时创建，成功时关闭已修复的 |
-| `/sync-issues` | 将 GitHub issue 同步到 GitCode 平台 |
+| `/sync-issues` | 将 GitHub issue 同步到 GitCode（`kerer-sk/pytorch`） |
 | `/scheduled-ci-analysis` | 创建每日定时 CI 分析任务（北京时间 08:00），自动执行完整分析流程 |
 
 ### 典型工作流
