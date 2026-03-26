@@ -37,18 +37,13 @@ jobs:
             patchelf \
             ccache
 
-      - name: Get date
-        id: date
-        run: echo "date=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
-
-      - name: Restore ccache
-        id: ccache-restore
-        uses: actions/cache/restore@v4
+      - name: Cache pip
+        uses: actions/cache@v4
         with:
-          path: ~/.ccache
-          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ steps.date.outputs.date }}
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-torch-nightly
           restore-keys: |
-            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+            pip-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
       - name: Install PyTorch nightly (CPU, x86_64)
         id: install_torch
@@ -81,6 +76,15 @@ jobs:
           echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
           echo "Ascend/pytorch commit: ${COMMIT} (${COMMIT_DATE})"
 
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ steps.clone_repo.outputs.commit }}
+          restore-keys: |
+            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
       - name: Install Python build dependencies
         run: |
           cd ascend_pytorch
@@ -100,6 +104,9 @@ jobs:
           export CCACHE_DIR="${HOME}/.ccache"
           export CCACHE_COMPRESS=1
           export CCACHE_MAXSIZE=5G
+
+          # 根据 runner CPU 核心数设置并行编译数
+          export MAX_JOBS=$(nproc)
 
           # 默认启用 torchair 构建；RPC 使用默认构建行为（不强制禁用）
           export DISABLE_INSTALL_TORCHAIR=FALSE
@@ -123,7 +130,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ steps.date.outputs.date }}
+          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ steps.clone_repo.outputs.commit }}
 
       - name: Upload build log
         if: always()
@@ -158,7 +165,7 @@ jobs:
           |------|------|
           | 构建时间 | $(date -u '+%Y-%m-%d %H:%M UTC') |
           | PyTorch Nightly | \`${{ steps.install_torch.outputs.version }}\` |
-          | Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://github.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |
+          | Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |
           | Commit 时间 | ${{ steps.clone_repo.outputs.commit_date }} |
           | ccache 命中率 | ${{ steps.build.outputs.hit_rate || 'N/A' }} |
           | 构建结果 | ${STATUS_ICON} |
