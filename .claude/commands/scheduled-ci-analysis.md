@@ -31,23 +31,24 @@ git pull
 
 ## 步骤 2：执行 analyze-failure
 
-调用 Skill 工具执行 `analyze-failure`，分析最新失败的 CI 运行。
+调用 Skill 工具执行 `analyze-failure`。
 
-## 步骤 3：执行 report-issue
+该命令会：
+- 获取最新 CI 构建结果
+- 构建失败时：分析原因并创建 GitHub issue
+- 构建成功时：检查并关闭已修复的 issue
 
-调用 Skill 工具执行 `report-issue`。（该 skill 内部会判断失败类型，决定是否创建 issue 文件）
+**注意**：如果判断为 CI 脚本失败需要修复 workflow，应直接修复 `.github/workflows/*.yml`。
 
-**注意**：如果 `report-issue` 判断为 CI 脚本失败需要修复 workflow，应直接修复 `.github/workflows/*.yml`。
+## 步骤 3：执行 sync-issues
 
-## 步骤 4：执行 sync-issues
-
-如果步骤 3 成功创建了新的 issue 文件，调用 Skill 工具执行 `sync-issues`，同步到 GitCode 平台。
+如果步骤 2 成功创建了新的 GitHub issue，调用 Skill 工具执行 `sync-issues`，同步到 GitCode 平台（`kerer-sk/pytorch`）。
 
 ---
 
 ## 重要约束
 
-1. **严格按顺序执行**：analyze-failure → report-issue → sync-issues，不交叉混用
+1. **严格按顺序执行**：analyze-failure → sync-issues，不交叉混用
 2. **条件执行**：根据上一步结果决定是否继续
 3. **每次执行独立**：不依赖之前执行的状态
 ```
@@ -62,7 +63,7 @@ git pull
 ✓ 已创建定时 CI 分析任务
 
 - 执行时间：每天北京时间 08:00
-- 任务内容：拉取代码 → analyze-failure → report-issue → sync-issues
+- 任务内容：拉取代码 → analyze-failure → sync-issues
 - 有效期：7 天（自动过期）
 - 每次在独立上下文中执行
 
