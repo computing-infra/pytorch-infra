@@ -5,7 +5,7 @@
 ## Workflow 流程
 
 ```
-每日 UTC 21:00（北京时间 05:00）自动触发
+每日三次自动触发（北京时间 06:00 / 11:00 / 16:00）
             │
             ▼
 ┌─────────────────────────────────┐
@@ -40,5 +40,6 @@
 |------|------|
 | `/analyze-failure` | 分析最新 CI 构建：失败时创建 issue，成功时关闭已修复的 |
 | `/sync-issues` | 将 GitHub issue 同步到 GitCode（`Ascend/pytorch`） |
+| `/scheduled-ci-analysis` | 创建定时任务：每日三次自动执行 `/analyze-failure`（北京时间 08:00/13:00/18:00） |
 
 **典型流程：** `/analyze-failure` → `/sync-issues`
