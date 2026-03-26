@@ -94,10 +94,21 @@ error: 'struct X' has no member named 'Y'
 > **注意**：此问题需在 Ascend/pytorch 上游仓库修复，本项目仅进行每日验证。
 ```
 
-### 第四步：完成后输出
+### 第四步：提交到远端
+
+创建 issue 文件后，提交并推送到远程仓库：
+
+```bash
+git add issues/YYYY-MM-DD-NNN-*.md
+git commit -m "docs: 添加 issue 记录 <问题描述简述>"
+git push
+```
+
+### 第五步：完成后输出
 
 告知用户：
 - issue 文件路径
+- 已提交到远端
 - 提醒问题需在 Ascend/pytorch 上游仓库修复
 
 ## 何时不创建 issue（新增）
