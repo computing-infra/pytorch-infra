@@ -87,7 +87,7 @@ fi
 | 命令 | 用途 |
 |------|------|
 | `/analyze-failure` | 分析最新 CI 构建：失败时创建 issue，成功时关闭已修复的 issue |
-| `/sync-issues` | 将 GitHub issue 同步到 GitCode（`kerer-sk/pytorch`） |
+| `/sync-issues` | 将 GitHub issue 同步到 GitCode（`Ascend/pytorch`） |
 | `/scheduled-ci-analysis` | 创建每日定时 CI 分析任务（北京时间 08:00） |
 
 ### 典型工作流
@@ -105,6 +105,17 @@ fi
 - 使用单行值或 heredoc 格式输出多行内容
 - 构建日志 artifact 使用 `if: always()` 确保失败时也能上传
 - ccache 已启用；命中率在 step summary 中查看
+
+### gh 命令网络问题
+
+GitHub CLI 偶尔会遇到网络连接问题：
+```
+Post "https://api.github.com/graphql": EOF
+```
+
+**原因**：GitHub API 服务器意外关闭连接、网络波动、API 限流等临时性问题。
+
+**处理方式**：直接重试同一命令即可。
 
 ## 文档维护
 

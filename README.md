@@ -39,6 +39,6 @@
 | 命令 | 用途 |
 |------|------|
 | `/analyze-failure` | 分析最新 CI 构建：失败时创建 issue，成功时关闭已修复的 |
-| `/sync-issues` | 将 GitHub issue 同步到 GitCode（`kerer-sk/pytorch`） |
+| `/sync-issues` | 将 GitHub issue 同步到 GitCode（`Ascend/pytorch`） |
 
 **典型流程：** `/analyze-failure` → `/sync-issues`

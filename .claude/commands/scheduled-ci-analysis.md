@@ -42,7 +42,7 @@ git pull
 
 ## 步骤 3：执行 sync-issues
 
-如果步骤 2 成功创建了新的 GitHub issue，调用 Skill 工具执行 `sync-issues`，同步到 GitCode 平台（`kerer-sk/pytorch`）。
+如果步骤 2 成功创建了新的 GitHub issue，调用 Skill 工具执行 `sync-issues`，同步到 GitCode 平台（`Ascend/pytorch`）。
 
 ---
 

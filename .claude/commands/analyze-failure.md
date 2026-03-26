@@ -22,24 +22,30 @@ gh auth status
 ## 执行流程
 
 ```
-获取最新 CI 构建
-       │
-       ├── ❌ 失败 ──→ 分析失败原因 → 创建 GitHub issue
-       │
-       └── ✅ 成功 ──→ 检查 open issue → 关闭已修复的 issue
+获取最新执行完成的 Run
+          │
+          ├── 无记录 ──→ 停止任务，报告无构建
+          │
+          ├── ❌ 失败 ──→ 分析失败原因 → 创建 GitHub issue
+          │
+          └── ✅ 成功 ──→ 检查 open issue → 关闭已修复的 issue
 ```
 
 ---
 
 ## 模式一：构建失败 → 分析 + 创建 issue
 
-### 第一步：获取最新失败 Run
+### 第一步：获取最新执行完成的 Run
 
 ```bash
-gh run list --repo kerer-ai/pytorch-npu --limit 5
+gh run list --repo computing-infra/pytorch-infra --limit 5 --status completed
 ```
 
-记录最新一条失败 Run 的 ID 和触发时间。
+**如果没有任何执行完成的 Run，停止任务并报告。**
+
+记录最新一条执行完成的 Run 的 ID、状态和触发时间。根据状态决定后续操作：
+- `failure` → 进入"构建失败"流程
+- `success` → 进入"构建成功"流程
 
 **构建进度判断：**
 - `< 2 分钟` → 早期失败（checkout、依赖安装）
@@ -50,11 +56,11 @@ gh run list --repo kerer-ai/pytorch-npu --limit 5
 
 ```bash
 # PyTorch nightly 版本
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log 2>&1 \
+gh run view <run_id> --repo computing-infra/pytorch-infra --log 2>&1 \
   | grep -E "PyTorch nightly version:" | head -1
 
 # Ascend/pytorch commit
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log 2>&1 \
+gh run view <run_id> --repo computing-infra/pytorch-infra --log 2>&1 \
   | grep -E "Ascend/pytorch commit:" | head -1
 ```
 
@@ -62,10 +68,10 @@ gh run view <run_id> --repo kerer-ai/pytorch-npu --log 2>&1 \
 
 ```bash
 # 获取失败日志
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 | head -300
+gh run view <run_id> --repo computing-infra/pytorch-infra --log-failed 2>&1 | head -300
 
 # 检查失败特征
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log-failed 2>&1 \
+gh run view <run_id> --repo computing-infra/pytorch-infra --log-failed 2>&1 \
   | grep -E "error:|make\[.*\]:|Invalid format|GITHUB_OUTPUT|Permission denied|exceeded the maximum|Unable to locate|Connection refused" \
   | head -30
 ```
@@ -138,7 +144,7 @@ gh issue create -R computing-infra/pytorch-infra \
 | 项目 | 详情 |
 |------|------|
 | 发现日期 | YYYY-MM-DD |
-| Action 链接 | https://github.com/kerer-ai/pytorch-npu/actions/runs/<run_id> |
+| Action 链接 | https://github.com/computing-infra/pytorch-infra/actions/runs/<run_id> |
 
 ## 版本信息
 
@@ -195,7 +201,7 @@ EOF
 ### 第一步：获取当前构建信息
 
 ```bash
-gh run list --repo kerer-ai/pytorch-npu --limit 1
+gh run list --repo computing-infra/pytorch-infra --limit 1
 ```
 
 提取 Run ID 和版本信息。
@@ -214,7 +220,7 @@ gh issue list -R computing-infra/pytorch-infra --state open --limit 50
 2. **检查构建日志**：错误是否仍存在
 
 ```bash
-gh run view <run_id> --repo kerer-ai/pytorch-npu --log > /tmp/build.log
+gh run view <run_id> --repo computing-infra/pytorch-infra --log > /tmp/build.log
 grep -E "<关键错误特征>" /tmp/build.log
 ```
 
