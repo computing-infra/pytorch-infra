@@ -8,19 +8,41 @@
 如果上述信息不明确，先运行 `/analyze-failure`。
 
 > 先判断失败类型：
-> - **兼容性失败（代码/API）**：写入 `issues/` 并配套 patch
+> - **兼容性失败（代码/API）**：写入 `issues/` 记录问题
 > - **CI 脚本失败（workflow 语法/输出格式）**：优先修 workflow，通常不创建 `issues/` 兼容性条目
 
 ## 执行步骤
 
-### 第一步：确定编号
+### 第一步：检查重复 issue
+
+**必须先检查是否存在相同问题的 issue，避免重复创建。**
+
+```bash
+# 查看现有 issue 列表
+ls -la issues/
+
+# 根据受影响文件或错误关键词搜索
+grep -l "ProcessGroupHCCL" issues/*.md 2>/dev/null
+grep -l "SocVersion" issues/*.md 2>/dev/null
+```
+
+**去重判断标准：**
+- 同一受影响文件 + 同一错误类型 → 视为重复，不创建
+- 同一 API 变更导致的错误 → 视为重复，不创建
+- 不同文件的不同错误 → 创建新 issue
+
+**如果存在重复：**
+- 告知用户已存在相关 issue 文件路径
+- 如需更新，直接编辑现有文件而非新建
+
+### 第二步：确定编号
 
 ```bash
 date +%Y-%m-%d          # 获取今日日期
 ls issues/              # 查看当天已有几个 issue，确定序号（001、002…）
 ```
 
-### 第二步：创建 issue 文件
+### 第三步：创建 issue 文件
 
 命名规则：`issues/YYYY-MM-DD-NNN-<受影响模块简述>.md`
 
@@ -36,8 +58,6 @@ ls issues/              # 查看当天已有几个 issue，确定序号（001、
   - `相对/路径/文件1.cpp`
   - `相对/路径/文件2.hpp`（如有）
 - **触发版本**：PyTorch nightly YYYY-MM-DD
-- **对应 patch**：`patches/NNNN-fix-<模块>-<描述>.patch`
-- **前置 patch**：`patches/上一个patch名.patch`（若本问题是在修复前序问题后才暴露，填写；否则删除此行）
 
 ---
 
@@ -66,20 +86,19 @@ error: 'struct X' has no member named 'Y'
 
 ## 修复方案
 
-见 `patches/NNNN-xxx.patch`，核心改动：
+建议的修复方式：
 
-1. **改动1**：（说明做了什么，为什么这样改）
+1. **改动1**：（说明需要做什么改动）
 2. **改动2**：（同上）
 
-> 注意事项（如有）：说明修复中的取舍或潜在影响
+> **注意**：此问题需在 Ascend/pytorch 上游仓库修复，本项目仅进行每日验证。
 ```
 
-### 第三步：完成后输出
+### 第四步：完成后输出
 
 告知用户：
 - issue 文件路径
-- 如果 patch 尚未生成，提示运行 `/gen-patch`
-- 如果 patch 已生成，提示直接运行 `/gen-patch` 的"提交验证"部分
+- 提醒问题需在 Ascend/pytorch 上游仓库修复
 
 ## 何时不创建 issue（新增）
 
