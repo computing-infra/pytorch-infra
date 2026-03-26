@@ -123,7 +123,7 @@ gitcode_issue_id: 123
 
 ```bash
 gc issue create -R kerer-sk/pytorch \
-  --title "<title>" \
+  --title "[Bug] <title>" \
   --body "$(cat <file_path>)"
 ```
 
@@ -138,12 +138,12 @@ gc issue create -R kerer-sk/pytorch \
 从输出提取 issue 编号后，添加标签：
 
 ```bash
-gc issue label <issue_number> --add ai-analyze,nightly-ci -R kerer-sk/pytorch
+gc issue label <issue_number> --add ai-analyze,nightly-ci,bug -R kerer-sk/pytorch
 ```
 
 输出示例：
 ```
-✓ Added labels to issue #123: ai-analyze, nightly-ci
+✓ Added labels to issue #123: ai-analyze, nightly-ci, bug
 ```
 
 #### 3.5 记录同步结果
@@ -240,7 +240,7 @@ git push
 ## 注意事项
 
 - **正文内容**：使用文件全部内容作为 body，包括标题行
-- **标签**：所有 issue 统一添加 `ai-analyze` 和 `nightly-ci` 两个标签
+- **标签**：所有 issue 统一添加 `ai-analyze`、`nightly-ci` 和 `bug` 三个标签
 - **目标仓库**：固定为 `kerer-sk/pytorch`
 - **本地文件更新**：同步成功后必须更新本地文件添加 `gitcode_issue_id`，避免重复提交
 
