@@ -16,10 +16,14 @@
 
 ## Open Issues
 
+当前无 open issue。
+
+### 已关闭 Issues
+
 | Issue | 标题 | 状态 |
 |-------|------|------|
-| [#12](https://github.com/computing-infra/pytorch-infra/issues/12) | CachingHostAllocator 接口重构 | Open |
-| [#13](https://github.com/computing-infra/pytorch-infra/issues/13) | SymmetricMemory 接口演进 | Open |
+| [#12](https://github.com/computing-infra/pytorch-infra/issues/12) | CachingHostAllocator 接口重构 | ✅ 已修复 |
+| [#13](https://github.com/computing-infra/pytorch-infra/issues/13) | SymmetricMemory 接口演进 | ✅ 已修复 |
 
 ---
 
