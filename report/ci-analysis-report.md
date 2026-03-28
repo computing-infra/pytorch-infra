@@ -16,6 +16,7 @@
 | 2026-03-26 22:20:03 UTC | ✅ 成功 | 2.12.0.dev20260326+cpu | `e787d68d` | 1h6m | [查看执行记录](https://github.com/computing-infra/pytorch-infra/actions/runs/23620863183) | 无 |
 | 2026-03-26 12:53:45 UTC | ❌ 失败 | 2.12.0.dev20260326+cpu | - | 19m34s | [查看执行记录](https://github.com/computing-infra/pytorch-infra/actions/runs/23595345537) | **克隆失败**: Ascend/pytorch 仓库克隆超时（网络问题） |
 | 2026-03-26 11:29:50 UTC | ✅ 成功 | 2.12.0.dev20260326+cpu | `91a4eb79` | 1h15m | [查看执行记录](https://github.com/computing-infra/pytorch-infra/actions/runs/23591964908) | 无 |
+| 2026-03-26 04:28:45 UTC | ❌ 失败 | 2.12.0.dev20260325+cpu | - | 38m33s | [查看执行记录](https://github.com/kerer-ai/pytorch-npu-codex/actions/runs/23577538981) | **编译失败**: `Ascend910_95` not member of `SocVersion` (`ProcessGroupHCCL.cpp:430`) |
 
 ---
 
@@ -94,15 +95,27 @@
 - **构建时长**: 1h15m
 - **发现问题**: 无
 
+### 2026-03-26 04:28:45 UTC (Run #23577538981) ❌ [kerer-ai/pytorch-npu-codex]
+
+- **状态**: ❌ 失败
+- **触发方式**: schedule (每日定时)
+- **PyTorch Nightly**: `2.12.0.dev20260325+cpu`
+- **失败步骤**: Build torch_npu wheel
+- **构建时长**: 38m33s
+- **发现问题**: **编译失败** - `Ascend910_95` is not a member of `c10_npu::SocVersion`
+- **受影响文件**: `torch_npu/csrc/distributed/ProcessGroupHCCL.cpp:430`
+- **错误类型**: C1 API 删除（枚举成员移除）
+- **Issue 操作**: 未创建 issue（不同仓库）
+
 ---
 
 ## 统计
 
-- **总构建次数**: 8
+- **总构建次数**: 9
 - **成功次数**: 7
-- **失败次数**: 1
-- **成功率**: 87.5%
-- **失败类型**: 网络问题（克隆超时），非编译失败
+- **失败次数**: 2
+- **成功率**: 77.8%
+- **失败类型**: 网络问题（1次）、编译失败（1次）
 
 ---
 
