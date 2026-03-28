@@ -17,6 +17,8 @@
 | 2026-03-26 12:53:45 UTC | ❌ 失败 | 2.12.0.dev20260326+cpu | - | 19m34s | [查看执行记录](https://github.com/computing-infra/pytorch-infra/actions/runs/23595345537) | **克隆失败**: Ascend/pytorch 仓库克隆超时（网络问题） |
 | 2026-03-26 11:29:50 UTC | ✅ 成功 | 2.12.0.dev20260326+cpu | `91a4eb79` | 1h15m | [查看执行记录](https://github.com/computing-infra/pytorch-infra/actions/runs/23591964908) | 无 |
 | 2026-03-26 04:28:45 UTC | ❌ 失败 | 2.12.0.dev20260325+cpu | - | 38m33s | [查看执行记录](https://github.com/kerer-ai/pytorch-npu-codex/actions/runs/23577538981) | **编译失败**: `Ascend910_95` not member of `SocVersion` (`ProcessGroupHCCL.cpp:430`) |
+| 2026-03-07 14:31:31 UTC | ❌ 失败 | 2.12.0.dev20260306+cpu | - | 56m36s | [查看执行记录](https://github.com/kerer-ai/pytorch-npu/actions/runs/22800875730) | **编译失败**: `GroupInfo` has no member `rank_to_global_rank` (`NPUSHMEMSymmetricMemory.cpp`) |
+| 2026-03-07 13:59:39 UTC | ❌ 失败 | 2.12.0.dev20260306+cpu | - | 10m12s | [查看执行记录](https://github.com/kerer-ai/pytorch-npu/actions/runs/22800386680) | **编译失败**: `CachingHostAllocator` API 重构 (`blocks`→`blocks_`, `process_events` 签名变更) |
 
 ---
 
@@ -107,15 +109,42 @@
 - **错误类型**: C1 API 删除（枚举成员移除）
 - **Issue 操作**: 未创建 issue（不同仓库）
 
+### 2026-03-07 14:31:31 UTC (Run #22800875730) ❌ [kerer-ai/pytorch-npu]
+
+- **状态**: ❌ 失败
+- **触发方式**: workflow_dispatch (手动触发)
+- **PyTorch Nightly**: `2.12.0.dev20260306+cpu`
+- **失败步骤**: Build torch_npu wheel
+- **构建时长**: 56m36s
+- **发现问题**: **编译失败** - `GroupInfo` has no member `rank_to_global_rank`
+- **受影响文件**: `torch_npu/csrc/distributed/symm_mem/NPUSHMEMSymmetricMemory.cpp`
+- **错误类型**: C1 API 删除（结构体成员移除）
+- **Issue 操作**: 未创建 issue（不同仓库）
+
+### 2026-03-07 13:59:39 UTC (Run #22800386680) ❌ [kerer-ai/pytorch-npu]
+
+- **状态**: ❌ 失败
+- **触发方式**: workflow_dispatch (手动触发)
+- **PyTorch Nightly**: `2.12.0.dev20260306+cpu`
+- **失败步骤**: Build torch_npu wheel
+- **构建时长**: 10m12s
+- **发现问题**: **编译失败** - `CachingHostAllocator` API 重构
+  - `BlockPool::blocks` → `BlockPool::blocks_`
+  - `BlockPool::unmapped` 成员移除
+  - `process_events()` 签名变更（需要 pool 参数）
+- **受影响文件**: `torch_npu/csrc/core/npu/CachingHostAllocator.cpp`
+- **错误类型**: C1 API 删除 + C2 签名变更
+- **Issue 操作**: 未创建 issue（不同仓库）
+
 ---
 
 ## 统计
 
-- **总构建次数**: 9
+- **总构建次数**: 11
 - **成功次数**: 7
-- **失败次数**: 2
-- **成功率**: 77.8%
-- **失败类型**: 网络问题（1次）、编译失败（1次）
+- **失败次数**: 4
+- **成功率**: 63.6%
+- **失败类型**: 网络问题（1次）、编译失败（3次）
 
 ---
 
