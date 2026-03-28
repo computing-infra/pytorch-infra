@@ -16,7 +16,10 @@
 
 ## Open Issues
 
-当前无 open issue。
+| Issue | 标题 | 状态 |
+|-------|------|------|
+| [#12](https://github.com/computing-infra/pytorch-infra/issues/12) | CachingHostAllocator 接口重构 | Open |
+| [#13](https://github.com/computing-infra/pytorch-infra/issues/13) | SymmetricMemory 接口演进 | Open |
 
 ---
 
@@ -33,8 +36,8 @@
 | 2026-03-26 12:53:45 UTC | ❌ 失败 | 2.12.0.dev20260326+cpu | - | 19m34s | [查看执行记录](https://github.com/computing-infra/pytorch-infra/actions/runs/23595345537) | **克隆失败**: Ascend/pytorch 仓库克隆超时（网络问题） | |
 | 2026-03-26 11:29:50 UTC | ✅ 成功 | 2.12.0.dev20260326+cpu | `91a4eb79` | 1h15m | [查看执行记录](https://github.com/computing-infra/pytorch-infra/actions/runs/23591964908) | 无 | |
 | 2026-03-26 04:28:45 UTC | ❌ 失败 | 2.12.0.dev20260325+cpu | - | 38m33s | [查看执行记录](https://github.com/kerer-ai/pytorch-npu-codex/actions/runs/23577538981) | **编译失败**: `Ascend910_95` not member of `SocVersion` (`ProcessGroupHCCL.cpp:430`) | |
-| 2026-03-07 14:31:31 UTC | ❌ 失败 | 2.12.0.dev20260306+cpu | - | 56m36s | [查看执行记录](https://github.com/kerer-ai/pytorch-npu/actions/runs/22800875730) | **编译失败**: `GroupInfo` has no member `rank_to_global_rank` (`NPUSHMEMSymmetricMemory.cpp`) | |
-| 2026-03-07 13:59:39 UTC | ❌ 失败 | 2.12.0.dev20260306+cpu | - | 10m12s | [查看执行记录](https://github.com/kerer-ai/pytorch-npu/actions/runs/22800386680) | **编译失败**: `CachingHostAllocator` API 重构 (`blocks`→`blocks_`, `process_events` 签名变更) | |
+| 2026-03-07 14:31:31 UTC | ❌ 失败 | 2.12.0.dev20260306+cpu | - | 56m36s | [查看执行记录](https://github.com/kerer-ai/pytorch-npu/actions/runs/22800875730) | **编译失败**: `GroupInfo` has no member `rank_to_global_rank` (`NPUSHMEMSymmetricMemory.cpp`) | [#13](https://github.com/computing-infra/pytorch-infra/issues/13) |
+| 2026-03-07 13:59:39 UTC | ❌ 失败 | 2.12.0.dev20260306+cpu | - | 10m12s | [查看执行记录](https://github.com/kerer-ai/pytorch-npu/actions/runs/22800386680) | **编译失败**: `CachingHostAllocator` API 重构 (`blocks`→`blocks_`, `process_events` 签名变更) | [#12](https://github.com/computing-infra/pytorch-infra/issues/12) |
 
 ---
 
