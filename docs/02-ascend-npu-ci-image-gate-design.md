@@ -1355,3 +1355,720 @@ torch._register_device_module('npu', torch_npu.npu)
 # 设置 PrivateUse1 后端 (可选)
 torch._C._set_privateuse1_backend_name("npu")
 ```
+
+---
+
+## 十、PyTorch 官方镜像制作详解
+
+### 10.1 build.sh 核心逻辑
+
+PyTorch 镜像构建入口脚本 `.ci/docker/build.sh` 的核心逻辑：
+
+```bash
+#!/bin/bash
+# 镜像构建三步流程：
+# 1. 根据镜像名称提取参数
+# 2. 运行 docker build
+# 3. 验证安装的软件版本
+
+# Dockerfile 选择逻辑
+if [[ "$image" == *rocm* ]]; then
+  DOCKERFILE="${OS}-rocm/Dockerfile"
+elif [[ "$image" == *xpu* ]]; then
+  DOCKERFILE="${OS}-xpu/Dockerfile"
+elif [[ "$image" == *riscv* ]]; then
+  DOCKERFILE="ubuntu-cross-riscv/Dockerfile"
+else
+  DOCKERFILE="${OS}/Dockerfile"  # CUDA 或 CPU
+fi
+
+# 核心配置示例 (XPU)
+case "$tag" in
+  pytorch-linux-noble-xpu-n-py3)
+    ANACONDA_PYTHON_VERSION=3.10
+    GCC_VERSION=13
+    VISION=yes
+    XPU_VERSION=2025.3
+    XPU_DRIVER_TYPE=LTS
+    NINJA_VERSION=1.9.0
+    TRITON=yes
+    ;;
+esac
+
+# Docker build 命令
+docker buildx build \
+  --build-arg "BUILD_ENVIRONMENT=${image}" \
+  --build-arg "ANACONDA_PYTHON_VERSION=${ANACONDA_PYTHON_VERSION}" \
+  --build-arg "GCC_VERSION=${GCC_VERSION}" \
+  --build-arg "XPU_VERSION=${XPU_VERSION}" \
+  --build-arg "XPU_DRIVER_TYPE=${XPU_DRIVER_TYPE}" \
+  --build-arg "NPU_ARCH=${NPU_ARCH}" \
+  -f "${DOCKERFILE}" \
+  -t "$tmp_tag" .
+```
+
+### 10.2 Dockerfile 层级设计原则
+
+参考 XPU Dockerfile 的层级设计：
+
+```dockerfile
+# 第一层：基础依赖（可缓存）
+COPY ./common/install_base.sh install_base.sh
+RUN bash ./install_base.sh && rm install_base.sh
+
+# 第二层：用户和权限
+COPY ./common/install_user.sh install_user.sh
+RUN bash ./install_user.sh && rm install_user.sh
+
+# 第三层：语言环境（Python/Conda）
+COPY ./common/install_conda.sh install_conda.sh
+RUN bash ./install_conda.sh && rm install_conda.sh
+
+# 第四层：编译工具（GCC/Clang）
+COPY ./common/install_gcc.sh install_gcc.sh
+RUN bash ./install_gcc.sh && rm install_gcc.sh
+
+# 第五层：设备特定组件（XPU/ROCm/NPU）
+COPY ./common/install_xpu.sh install_xpu.sh
+RUN bash ./install_xpu.sh && rm install_xpu.sh
+
+# 第六层：可选组件（Triton/Vision/Benchmarks）
+ARG TRITON
+COPY ./common/install_triton.sh install_triton.sh
+RUN if [ -n "${TRITON}" ]; then bash ./install_triton.sh; fi
+
+# 第七层：缓存工具（最后安装，优先PATH）
+COPY ./common/install_cache.sh install_cache.sh
+ENV PATH /opt/cache/bin:$PATH
+RUN bash ./install_cache.sh && rm install_cache.sh
+```
+
+### 10.3 安装脚本设计模式
+
+#### 10.3.1 通用结构
+
+```bash
+#!/bin/bash
+set -xe
+
+# 版本映射
+declare -A VERSION_MAP=(
+    ["8.0"]="8.0.RC1"
+    ["8.1"]="8.1.0"
+)
+
+# 按操作系统分发
+function install_ubuntu() {
+    . /etc/os-release
+    # Ubuntu 特定安装逻辑
+}
+
+function install_rhel() {
+    # RHEL/AlmaLinux 特定安装逻辑
+}
+
+# 主入口
+ID=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
+case "$ID" in
+    ubuntu) install_ubuntu ;;
+    rhel|almalinux) install_rhel ;;
+    *) echo "Unsupported OS: $ID"; exit 1 ;;
+esac
+```
+
+#### 10.3.2 XPU install_xpu.sh 关键实现
+
+```bash
+#!/bin/bash
+set -xe
+
+function install_ubuntu() {
+    . /etc/os-release
+
+    # Driver 类型选择
+    if [[ "${XPU_DRIVER_TYPE,,}" == "client" ]]; then
+        # Client driver - 从 PPA 安装
+        add-apt-repository -y ppa:kobuk-team/intel-graphics
+        apt-get install -y xpu-smi intel-opencl-icd libze-dev intel-ocloc
+    else
+        # LTS driver - 从 Intel 官方仓库安装
+        wget -qO - https://repositories.intel.com/gpu/intel-graphics.key \
+            | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] \
+            https://repositories.intel.com/gpu/ubuntu ${VERSION_CODENAME}${XPU_DRIVER_VERSION} unified" \
+            | tee /etc/apt/sources.list.d/intel-gpu.list
+        apt-get update
+        apt-get install -y xpu-smi intel-opencl-icd libze-dev intel-ocloc
+    fi
+}
+
+# Driver 版本选择
+XPU_DRIVER_VERSION=""
+if [[ "${XPU_DRIVER_TYPE,,}" == "lts" ]]; then
+    XPU_DRIVER_VERSION="/lts/2523"
+fi
+
+# oneAPI 版本选择
+if [[ "$XPU_VERSION" == "2025.3" ]]; then
+    XPU_PACKAGES_URL="https://.../intel-deep-learning-essentials-2025.3_offline.sh"
+else
+    XPU_PACKAGES_URL="https://.../intel-deep-learning-essentials-2025.2_offline.sh"
+fi
+```
+
+### 10.4 版本 Pin 管理
+
+```
+.ci/docker/ci_commit_pins/
+├── nccl.txt              # NCCL commit SHA
+├── triton.txt            # Triton commit SHA
+├── triton-xpu.txt        # Triton-XPU commit SHA
+├── rocm-composable-kernel.txt  # ROCm CK commit SHA
+├── huggingface-requirements.txt  # HF 依赖版本
+├── timm.txt              # TIMM 版本
+└── torchbench.txt        # TorchBench 版本
+```
+
+Pin 文件格式示例：
+```
+# triton.txt - commit SHA
+7e48d5dfc3e30520da69a9cc41c6d00b566451e0
+```
+
+---
+
+## 十一、PyTorch 官方门禁方案详解
+
+### 11.1 门禁架构总览
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        PyTorch CI 门禁架构                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐                                                            │
+│  │ PR/Push     │                                                            │
+│  │ 触发        │                                                            │
+│  └──────┬──────┘                                                            │
+│         │                                                                   │
+│         ▼                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────┐       │
+│  │              _runner-determinator.yml                           │       │
+│  │  ┌─────────────────────────────────────────────────────────┐   │       │
+│  │  │  runner_determinator.py                                  │   │       │
+│  │  │  - 读取 GitHub Issue #5132 配置                          │   │       │
+│  │  │  - 检查用户 opt-in/opt-out                               │   │       │
+│  │  │  - 按 rollout percentage 随机分配                        │   │       │
+│  │  │  - 输出: label-type, use-arc                            │   │       │
+│  │  └─────────────────────────────────────────────────────────┘   │       │
+│  └─────────────────────────────────────────────────────────────────┘       │
+│         │                                                                   │
+│         ▼                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────┐       │
+│  │              主 Workflow (如 rocm-mi300.yml)                     │       │
+│  │  ┌─────────────────────────────────────────────────────────┐   │       │
+│  │  │  get-label-type: 获取 runner 类型                        │   │       │
+│  │  │  build: 使用 _linux-build.yml 构建                       │   │       │
+│  │  │  test: 使用 _rocm-test.yml 测试                          │   │       │
+│  │  └─────────────────────────────────────────────────────────┘   │       │
+│  └─────────────────────────────────────────────────────────────────┘       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.2 Runner Determinator 详解
+
+#### 11.2.1 配置来源
+
+配置存储在 GitHub Issue: `pytorch/test-infra#5132`
+
+```yaml
+# Issue Body 格式
+experiments:
+  lf:
+    rollout_percent: 25    # 25% 流量使用 LF runner
+    all_branches: false    # main/release 分支除外
+    default: true
+  arc:
+    rollout_percent: 10
+    all_branches: false
+    default: false
+---
+
+# 用户 opt-in 列表
+@User1,lf              # User1 加入 LF 实验
+@User2,-lf,split_build # User2 退出 LF，加入 split_build
+@User3                  # User3 无实验
+```
+
+#### 11.2.2 核心判断逻辑
+
+```python
+# runner_determinator.py 核心逻辑
+
+def get_runner_prefix(rollout_state, workflow_requestors, branch, ...):
+    settings = parse_settings(rollout_state)
+    user_optins = parse_users(rollout_state)
+
+    for experiment_name, experiment_settings in settings.experiments.items():
+        # 1. 检查例外分支
+        if not experiment_settings.all_branches and is_exception_branch(branch):
+            continue  # main/release/nightly/landchecks 分支不参与实验
+
+        # 2. 检查用户 opt-out
+        if is_user_opted_out(user, user_optins, experiment_name):
+            continue
+
+        # 3. 检查用户 opt-in
+        if is_user_opted_in(user, user_optins, experiment_name):
+            enabled = True
+
+        # 4. 按比例随机启用
+        elif random.uniform(0, 100) <= experiment_settings.rollout_perc:
+            enabled = True
+
+        # 5. 设置 runner 前缀
+        if enabled:
+            if experiment_name == "lf":
+                prefix = "lf."    # Linux Foundation runner
+            elif experiment_name == "arc":
+                prefix = "mt-"    # ARC runner
+
+    return prefix
+
+def is_exception_branch(branch: str) -> bool:
+    return branch.split("/", maxsplit=1)[0] in {
+        "main", "nightly", "release", "landchecks"
+    }
+```
+
+#### 11.2.3 Runner 类型对照
+
+| label-type | Runner 类型 | 说明 |
+|------------|-----------|------|
+| `""` | Meta Runner | 默认 Meta 内部 runner |
+| `"lf."` | LF Runner | Linux Foundation runner |
+| `"lf.c."` | LF Canary Runner | LF 金丝雀 runner |
+| `"mt-"` | ARC Runner | OSDC ARC runner |
+| `"c-mt-"` | ARC Canary Runner | ARC 金丝雀 runner |
+
+### 11.3 主 Workflow 结构
+
+#### 11.3.1 ROCm MI300 Workflow 示例
+
+```yaml
+# .github/workflows/rocm-mi300.yml
+
+name: rocm-mi300
+
+on:
+  push:
+    tags:
+      - ciflow/rocm-mi300/*
+  workflow_dispatch:
+  schedule:
+    - cron: 0 0,3,6,9,12,15,18,21 * * *  # 每3小时
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.ref_type == 'branch' && github.sha }}-${{ github.event_name == 'workflow_dispatch' }}-${{ github.event_name == 'schedule' }}
+  cancel-in-progress: true
+
+jobs:
+  # 1. 获取 Runner 类型
+  get-label-type:
+    uses: pytorch/pytorch/.github/workflows/_runner-determinator.yml@main
+    with:
+      triggering_actor: ${{ github.triggering_actor }}
+      issue_owner: ${{ github.event.pull_request.user.login }}
+      curr_branch: ${{ github.head_ref || github.ref_name }}
+      curr_ref_type: ${{ github.ref_type }}
+
+  # 2. 构建
+  linux-noble-rocm-py3_12-build:
+    uses: ./.github/workflows/_linux-build.yml
+    needs: get-label-type
+    with:
+      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
+      build-environment: linux-noble-rocm-py3.12-mi300
+      docker-image-name: ci-image:pytorch-linux-noble-rocm-n-py3
+      test-matrix: |
+        { include: [
+          { config: "default", shard: 1, num_shards: 6, runner: "linux.rocm.gpu.gfx942.1" },
+          ...
+        ]}
+    secrets: inherit
+
+  # 3. 测试
+  linux-noble-rocm-py3_12-test:
+    uses: ./.github/workflows/_rocm-test.yml
+    needs: linux-noble-rocm-py3_12-build
+    with:
+      build-environment: ${{ needs.linux-noble-rocm-py3_12-build.outputs.build-environment }}
+      docker-image: ${{ needs.linux-noble-rocm-py3_12-build.outputs.docker-image }}
+      test-matrix: ${{ needs.linux-noble-rocm-py3_12-build.outputs.test-matrix }}
+    secrets: inherit
+```
+
+#### 11.3.2 XPU Workflow 示例
+
+```yaml
+# .github/workflows/xpu.yml
+
+name: xpu
+
+on:
+  push:
+    tags:
+      - ciflow/xpu/*
+  workflow_dispatch:
+  schedule:
+    - cron: 45 0,8,16 * * 1-5   # 工作日3次
+    - cron: 45 4 * * 0,6        # 周末1次
+
+jobs:
+  # 构建 + 测试 (LTS driver)
+  linux-noble-xpu-n-py3_10-build:
+    uses: ./.github/workflows/_linux-build.yml
+    needs: get-label-type
+    with:
+      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
+      build-environment: linux-noble-xpu-n-py3.10
+      docker-image-name: ci-image:pytorch-linux-noble-xpu-n-py3
+      test-matrix: |
+        { include: [
+          { config: "default", shard: 1, num_shards: 12, runner: "linux.idc.xpu" },
+          ...
+        ]}
+    secrets: inherit
+
+  # Client 测试 (Client driver)
+  linux-noble-xpu-n-py3_10-client-build:
+    uses: ./.github/workflows/_linux-build.yml
+    needs: get-label-type
+    with:
+      build-environment: linux-noble-xpu-n-py3.10-client
+      docker-image-name: ci-image:pytorch-linux-noble-xpu-n-py3-client
+      test-matrix: |
+        { include: [
+          { config: "smoke_xpu", shard: 1, num_shards: 1, runner: "linux.client.xpu" },
+        ]}
+    secrets: inherit
+```
+
+### 11.4 测试 Workflow (_rocm-test.yml / _xpu-test.yml)
+
+#### 11.4.1 测试流程
+
+```yaml
+jobs:
+  test:
+    strategy:
+      matrix: ${{ fromJSON(inputs.test-matrix) }}
+      fail-fast: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # 1. 检出代码
+      - name: Checkout PyTorch
+        uses: pytorch/pytorch/.github/actions/checkout-pytorch@main
+
+      # 2. 设置设备环境
+      - name: Setup XPU
+        uses: ./.github/actions/setup-xpu
+
+      # 3. 检查 GPU 数量 (分布式任务)
+      - name: Runner check GPU count
+        if: ${{ contains(matrix.config, 'distributed') }}
+        run: |
+          ngpu=$(xpu-smi discovery | grep -c 'Device Name')
+          if [[ $ngpu -lt 2 ]]; then
+            echo "Error: at least 2 GPUs needed for distributed jobs"
+            exit 1
+          fi
+
+      # 4. 拉取 Docker 镜像
+      - name: Pull docker image
+        uses: pytorch/test-infra/.github/actions/pull-docker-image@main
+
+      # 5. 下载构建产物
+      - name: Download build artifacts
+        uses: ./.github/actions/download-build-artifacts
+
+      # 6. 执行测试
+      - name: Test
+        env:
+          BUILD_ENVIRONMENT: ${{ inputs.build-environment }}
+          TEST_CONFIG: ${{ matrix.config }}
+          SHARD_NUMBER: ${{ matrix.shard }}
+          NUM_TEST_SHARDS: ${{ matrix.num_shards }}
+        run: |
+          container_name=$(docker run \
+            --device=/dev/dri \
+            --group-add video \
+            --shm-size="8g" \
+            --privileged \
+            -v "${GITHUB_WORKSPACE}:/var/lib/jenkins/workspace" \
+            "${DOCKER_IMAGE}")
+
+          docker exec -t "${container_name}" sh -c \
+            "cd .. && cp -R workspace pytorch && cd pytorch && pip install dist/*.whl && .ci/pytorch/test.sh"
+
+      # 7. 上传测试结果
+      - name: Upload test artifacts
+        uses: ./.github/actions/upload-test-artifacts
+
+      # 8. 清理环境
+      - name: Teardown XPU
+        uses: ./.github/actions/teardown-xpu
+```
+
+### 11.5 Setup Action 设计
+
+#### 11.5.1 setup-xpu/action.yml
+
+```yaml
+name: Setup XPU host
+
+runs:
+  using: composite
+  steps:
+    # 1. 健康检查 - 系统信息
+    - name: Runner health check system info
+      shell: bash
+      run: |
+        cat /etc/os-release || true
+        whoami
+
+    # 2. 健康检查 - GPU 检测
+    - name: Runner health check xpu-smi
+      shell: bash
+      run: |
+        timeout 30 xpu-smi discovery || true
+
+    # 3. 健康检查 - GPU 数量
+    - name: Runner health check GPU count
+      shell: bash
+      run: |
+        ngpu=$(timeout 30 xpu-smi discovery | grep -c 'Device Name' || true)
+        if [[ $ngpu -eq 0 ]]; then
+          echo "Error: Failed to detect any GPUs"
+          exit 1
+        fi
+
+    # 4. 磁盘空间检查
+    - name: Runner diskspace health check
+      uses: pytorch/pytorch/.github/actions/diskspace-cleanup@main
+
+    # 5. 设置环境变量
+    - name: Setup useful environment variables
+      shell: bash
+      run: |
+        RUNNER_ARTIFACT_DIR="${RUNNER_TEMP}/artifacts"
+        mkdir -p "${RUNNER_ARTIFACT_DIR}"
+        echo "RUNNER_ARTIFACT_DIR=${RUNNER_ARTIFACT_DIR}" >> "${GITHUB_ENV}"
+
+    # 6. 设置 GPU_FLAG (Docker 设备映射)
+    - name: XPU set GPU_FLAG
+      shell: bash
+      run: |
+        render_gid=$(cat /etc/group | grep render | cut -d: -f3)
+        echo "GPU_FLAG=--device=/dev/mem --device=/dev/dri --group-add video --group-add $render_gid" >> "${GITHUB_ENV}"
+
+    # 7. ECR 登录
+    - name: Login to ECR
+      uses: pytorch/pytorch/.github/actions/ecr-login@main
+```
+
+### 11.6 Docker 镜像构建 Workflow
+
+```yaml
+# .github/workflows/docker-builds.yml
+
+name: docker-builds
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .ci/docker/**
+  push:
+    branches: [main, release/*]
+  schedule:
+    - cron: 1 3 * * 3  # 每周三
+
+jobs:
+  docker-build:
+    strategy:
+      matrix:
+        docker-image-name: [
+          pytorch-linux-jammy-cuda12.8-cudnn9-py3-gcc11,
+          pytorch-linux-noble-rocm-n-py3,
+          pytorch-linux-noble-xpu-n-py3,
+          # ... 更多镜像
+        ]
+    runs-on: linux.12xlarge
+    steps:
+      - name: Checkout PyTorch
+        uses: pytorch/pytorch/.github/actions/checkout-pytorch@main
+
+      - name: Login to ECR
+        uses: ./.github/actions/ecr-login
+
+      - name: Build docker image
+        uses: pytorch/test-infra/.github/actions/calculate-docker-image@main
+        with:
+          docker-image-name: ci-image:${{ matrix.docker-image-name }}
+          always-rebuild: true
+          push: true
+
+      - name: Push to ghcr.io
+        if: github.event_name == 'push'
+        run: |
+          ghcr_image="ghcr.io/pytorch/ci-image"
+          docker tag "${ECR_DOCKER_IMAGE}" "${ghcr_image}:${tag}"
+          docker push "${ghcr_image}:${tag}"
+```
+
+### 11.7 门禁触发条件设计
+
+| Workflow | 触发条件 | 说明 |
+|----------|---------|------|
+| `rocm-mi300.yml` | 每3小时 | 高频回归测试 |
+| `rocm-mi355.yml` | 每日 | 新硬件测试 |
+| `xpu.yml` | 工作日3次/周末1次 | 定期测试 |
+| `slow-rocm-mi200.yml` | 手动/tag | 慢速测试 |
+| `inductor-perf-*.yml` | 每日 | 性能基准 |
+
+### 11.8 NPU 门禁建议配置
+
+#### 11.8.1 触发条件
+
+```yaml
+on:
+  push:
+    branches: [main, release/*]
+    tags:
+      - ciflow/npu/*
+      - ciflow/npu-910b/*
+  workflow_dispatch:
+  schedule:
+    # 910B: 每6小时运行
+    - cron: 0 0,6,12,18 * * *
+    # 310P: 每日运行
+    - cron: 0 2 * * *
+```
+
+#### 11.8.2 Runner 配置
+
+```yaml
+jobs:
+  get-label-type:
+    uses: pytorch/pytorch/.github/workflows/_runner-determinator.yml@main
+    with:
+      triggering_actor: ${{ github.triggering_actor }}
+      issue_owner: ${{ github.event.pull_request.user.login }}
+      curr_branch: ${{ github.head_ref || github.ref_name }}
+      curr_ref_type: ${{ github.ref_type }}
+
+  linux-noble-npu-910b-build:
+    uses: ./.github/workflows/_linux-build.yml
+    needs: get-label-type
+    with:
+      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
+      build-environment: linux-noble-npu-cann8.1-py3.10-910b
+      docker-image-name: ci-image:pytorch-linux-noble-npu-cann8.1-py3.10-gcc13
+      test-matrix: |
+        { include: [
+          { config: "default", shard: 1, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
+          { config: "default", shard: 2, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
+          ...
+        ]}
+    secrets: inherit
+```
+
+---
+
+## 十二、Docker 容器设备映射
+
+### 12.1 GPU 设备映射参数
+
+```bash
+# ROCm 容器设备映射
+docker run \
+  --device=/dev/mem \
+  --device=/dev/kfd \           # AMD KFD
+  --device=/dev/dri \           # DRI 设备
+  --group-add video \
+  --group-add render \
+  --group-add daemon \
+  --cap-add=SYS_PTRACE \
+  --security-opt seccomp=unconfined \
+  --shm-size="8g" \
+  "${DOCKER_IMAGE}"
+
+# XPU 容器设备映射
+docker run \
+  --device=/dev/mem \
+  --device=/dev/dri \
+  --group-add video \
+  --group-add render \
+  --privileged \
+  --shm-size="8g" \
+  "${DOCKER_IMAGE}"
+
+# NPU 容器设备映射 (建议)
+docker run \
+  --device=/dev/davinci0 \           # NPU 设备
+  --device=/dev/davinci1 \
+  --device=/dev/davinci_manager \    # 管理设备
+  --device=/dev/devmm_svm \          # SVM 设备
+  --device=/dev/hisi_hdc \           # HDC 设备
+  --group-add HwHiAiUser \
+  --privileged \
+  --shm-size="8g" \
+  "${DOCKER_IMAGE}"
+```
+
+### 12.2 环境变量传递
+
+```bash
+# 容器启动时传递的环境变量
+docker run \
+  -e BUILD_ENVIRONMENT \
+  -e PR_NUMBER \
+  -e GITHUB_ACTIONS \
+  -e SHARD_NUMBER \
+  -e TEST_CONFIG \
+  -e NUM_TEST_SHARDS \
+  -e HUGGING_FACE_HUB_TOKEN \
+  -e ZE_AFFINITY_MASK \        # XPU 设备亲和性
+  -e HIP_VISIBLE_DEVICES \     # ROCm 设备可见性
+  -e ASCEND_DEVICE_ID \        # NPU 设备 ID (建议)
+  "${DOCKER_IMAGE}"
+```
+
+---
+
+## 十三、参考实现对比
+
+### 13.1 CUDA vs ROCm vs XPU vs NPU
+
+| 特性 | CUDA | ROCm | XPU | **NPU (建议)** |
+|------|------|------|-----|----------------|
+| SDK 安装脚本 | `install_cuda.sh` | `install_rocm.sh` | `install_xpu.sh` | `install_npu.sh` |
+| Dockerfile 路径 | `ubuntu/Dockerfile` | `ubuntu-rocm/Dockerfile` | `ubuntu-xpu/Dockerfile` | `ubuntu-npu/Dockerfile` |
+| 测试 Workflow | `_linux-test.yml` | `_rocm-test.yml` | `_xpu-test.yml` | `_npu-test.yml` |
+| Setup Action | - | `setup-rocm` | `setup-xpu` | `setup-npu` |
+| 设备检测命令 | `nvidia-smi` | `rocm-smi` / `rocminfo` | `xpu-smi` | `npu-smi` |
+| 环境变量 | `CUDA_VERSION` | `ROCM_VERSION` | `XPU_VERSION` | `NPU_VERSION` |
+| 架构变量 | `TORCH_CUDA_ARCH_LIST` | `PYTORCH_ROCM_ARCH` | - | `NPU_ARCH` |
+| 通信库 | NCCL | RCCL | - | HCCL |
+| 计算库 | cuDNN | MIOpen | oneDNN | ACL |
+
+### 13.2 Workflow 复杂度对比
+
+| Workflow | Job 数 | 测试分片 | 触发频率 |
+|----------|-------|---------|---------|
+| `trunk.yml` (CUDA) | 20+ | 5-6 | 每次提交 |
+| `rocm-mi300.yml` | 3 | 6 | 每3小时 |
+| `xpu.yml` | 5 | 6-12 | 每日3次 |
+| **`npu-910b.yml` (建议)** | 3 | 6 | 每6小时 |
