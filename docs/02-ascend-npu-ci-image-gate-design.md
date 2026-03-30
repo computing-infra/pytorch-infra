@@ -957,3 +957,401 @@ jobs:
 - CANN文档: https://www.hiascend.com/document
 - HCCL文档: https://www.hiascend.com/document/detail/zh/canncommercial/700/featureintro/HCCLfeatureintro/HCCL_01_0001.html
 - npu-smi工具: https://www.hiascend.com/document/detail/zh/canncommercial/700/tools/npusmi/npusmi_01_0001.html
+
+---
+
+## 八、NPU 测试用例设计
+
+### 8.1 设备无关测试框架概述
+
+PyTorch 提供了 `instantiate_device_type_tests` 机制，允许同一测试模板为不同设备类型实例化测试。这是实现设备无关测试的核心机制。
+
+```python
+# torch/testing/_internal/common_device_type.py
+
+# 设备测试基类
+class DeviceTypeTestBase(TestCase):
+    device_type: str = "generic_device_type"
+
+# 设备测试基类列表
+device_type_test_bases = [CPUTestBase, CUDATestBase, XPUTestBase, MPSTestBase, ...]
+```
+
+#### 环境变量控制
+
+| 环境变量 | 说明 | 示例 |
+|---------|------|------|
+| `PYTORCH_TESTING_DEVICE_ONLY_FOR` | 仅运行指定设备的测试 | `npu` 或 `npu,cpu` |
+| `PYTORCH_TESTING_DEVICE_EXCEPT_FOR` | 排除指定设备的测试 | `cuda,xpu` |
+| `TORCH_TEST_DEVICES` | 自定义测试设备路径 | `/path/to/npu_test_base.py` |
+
+### 8.2 设备无关测试用例列表
+
+以下测试文件使用 `instantiate_device_type_tests`，可在 CPU、CUDA、XPU、NPU 等设备上运行：
+
+#### 8.2.1 核心运算测试
+
+| 测试文件 | 测试内容 | 设备无关性 |
+|---------|---------|-----------|
+| `test_ops.py` | 算子测试 (OpInfo) | ✅ 使用 `instantiate_device_type_tests` |
+| `test_ops_gradients.py` | 算子梯度测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_ops_fwd_gradients.py` | 前向梯度测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_prims.py` | 原语算子测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_reductions.py` | 归约操作测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_view_ops.py` | 视图操作测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_unary_ufuncs.py` | 一元通用函数测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_binary_ufuncs.py` | 二元通用函数测试 | ✅ 通过 run_test.py |
+| `test_indexing.py` | 索引操作测试 | ✅ 通过 run_test.py |
+| `test_scatter_gather_ops.py` | 散射/聚集操作测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_tensor_creation_ops.py` | 张量创建操作测试 | ✅ 使用 `instantiate_device_type_tests` |
+
+#### 8.2.2 数学运算测试
+
+| 测试文件 | 测试内容 | 设备无关性 |
+|---------|---------|-----------|
+| `test_linalg.py` | 线性代数测试 | ✅ 通过 run_test.py |
+| `test_spectral_ops.py` | 频谱操作测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_segment_reductions.py` | 分段归约测试 | ✅ 通过 run_test.py |
+| `test_complex.py` | 复数运算测试 | ✅ 通过 run_test.py |
+
+#### 8.2.3 张量特性测试
+
+| 测试文件 | 测试内容 | 设备无关性 |
+|---------|---------|-----------|
+| `test_sparse.py` | 稀疏张量测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_sparse_csr.py` | CSR稀疏张量测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_nestedtensor.py` | 嵌套张量测试 | ✅ 通过 run_test.py |
+| `test_namedtensor.py` | 命名张量测试 | ✅ 通过 run_test.py |
+| `test_fake_tensor.py` | FakeTensor测试 | ✅ 通过 run_test.py |
+
+#### 8.2.4 自动求导测试
+
+| 测试文件 | 测试内容 | 设备无关性 |
+|---------|---------|-----------|
+| `test_autograd.py` | 自动求导核心测试 | ✅ 通过 run_test.py |
+| `test_functionalization.py` | 函数化测试 | ✅ 通过 run_test.py |
+| `test_expanded_weights.py` | 扩展权重测试 | ✅ 通过 run_test.py |
+
+#### 8.2.5 神经网络测试
+
+| 测试文件 | 测试内容 | 设备无关性 |
+|---------|---------|-----------|
+| `test_nn.py` | 神经网络模块测试 | ✅ 通过 run_test.py |
+| `test_modules.py` | 模块测试 | ✅ 通过 run_test.py |
+| `test_optim.py` | 优化器测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_transformers.py` | Transformer相关测试 | ✅ 使用 `instantiate_device_type_tests` |
+
+#### 8.2.6 编译器/Inductor测试
+
+| 测试文件 | 测试内容 | 设备无关性 |
+|---------|---------|-----------|
+| `inductor/test_torchinductor.py` | Inductor核心测试 | ✅ 支持多设备 |
+| `inductor/test_aot_inductor.py` | AOT Inductor测试 | ✅ 支持多设备 |
+| `test_decomp.py` | 分解规则测试 | ✅ 通过 run_test.py |
+| `test_dispatch.py` | 分发机制测试 | ✅ 通过 run_test.py |
+
+#### 8.2.7 其他通用测试
+
+| 测试文件 | 测试内容 | 设备无关性 |
+|---------|---------|-----------|
+| `test_torch.py` | PyTorch核心功能测试 | ✅ 通过 run_test.py |
+| `test_serialization.py` | 序列化测试 | ✅ 通过 run_test.py |
+| `test_dataloader.py` | 数据加载器测试 | ✅ 通过 run_test.py |
+| `test_utils.py` | 工具函数测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_type_promotion.py` | 类型提升测试 | ✅ 使用 `instantiate_device_type_tests` |
+| `test_testing.py` | 测试框架测试 | ✅ 使用 `instantiate_device_type_tests` |
+
+### 8.3 NPU 测试配置
+
+#### 8.3.1 run_test.py 配置新增
+
+```python
+# test/run_test.py 新增配置
+
+# NPU 特有测试
+NPU_TEST = [
+    "test_npu",
+]
+
+# NPU 需要跳过的测试 (待完善)
+NPU_BLOCKLIST = [
+    # 根据 Ascend/pytorch 实际情况补充
+    # "test_autograd",  # 示例：如果 autograd 某些功能不支持
+]
+
+# XPU_BLOCKLIST 作为参考
+XPU_BLOCKLIST = [
+    "test_autograd",
+    "profiler/test_memory_profiler",
+]
+```
+
+#### 8.3.2 test.sh NPU 处理
+
+```bash
+# .ci/pytorch/test.sh 新增 NPU 处理
+
+if [[ "$BUILD_ENVIRONMENT" == *npu* ]]; then
+  export PYTORCH_TESTING_DEVICE_ONLY_FOR="npu"
+  export PYTHON_TEST_EXTRA_OPTION="--npu"
+
+  # 激活 NPU 环境
+  if [ -f /usr/local/Ascend/bin/setenv.bash ]; then
+    source /usr/local/Ascend/bin/setenv.bash
+  fi
+
+  # 检查 NPU 状态
+  echo "Checking NPU status..."
+  npu-smi info
+
+  # 设置 NPU 架构
+  if [ -n "$NPU_ARCH" ]; then
+    echo "NPU_ARCH: $NPU_ARCH"
+  fi
+fi
+
+# NPU Smoke 测试函数
+test_python_smoke_npu() {
+  # NPU Smoke 测试
+  python test/run_test.py --include test_transformers $PYTHON_TEST_EXTRA_OPTION --upload-artifacts-while-running
+  assert_git_not_dirty
+}
+
+# NPU 二进制测试函数
+test_npu_bin() {
+  # 运行 NPU 特有的二进制测试
+  for npu_case in "${BUILD_BIN_DIR}"/*npu*; do
+    if [[ "$npu_case" != *"*"* && "$npu_case" != *.so && "$npu_case" != *.a ]]; then
+      case_name=$(basename "$npu_case")
+      "$npu_case" --gtest_output=xml:"$TEST_REPORTS_DIR"/"$case_name".xml
+    fi
+  done
+}
+```
+
+#### 8.3.3 run_test.py 参数新增
+
+```python
+# test/run_test.py 新增 --npu 参数
+
+parser.add_argument(
+    "--npu",
+    "--npu",
+    action="store_true",
+    help=("If this flag is present, we will run npu tests except NPU_BLOCK_LIST"),
+)
+
+# NPU 测试选择逻辑
+if options.npu:
+    selected_tests = exclude_tests(NPU_BLOCKLIST, selected_tests, "on NPU")
+else:
+    # 排除 NPU 特有测试
+    options.exclude.extend(NPU_TEST)
+```
+
+### 8.4 NPU 测试基类设计
+
+参考 `XPUTestBase` 和 `PrivateUse1TestBase`，设计 NPU 测试基类：
+
+```python
+# torch_npu/testing/_internal/test_base.py
+
+import torch
+from torch.testing._internal.common_device_type import DeviceTypeTestBase
+
+class NPUTestBase(DeviceTypeTestBase):
+    device_type = "npu"
+
+    @classmethod
+    def setUpClass(cls):
+        if not torch.npu.is_available():
+            raise unittest.SkipTest("NPU not available")
+        cls.primary_device = f"npu:{torch.npu.current_device()}"
+        cls.device_mod = torch.npu
+
+    @classmethod
+    def instantiate_test(cls, name, test, generic_cls=None):
+        # 实例化测试
+        return super().instantiate_test(name, test, generic_cls)
+```
+
+### 8.5 测试分类策略
+
+#### 8.5.1 按测试类型分类
+
+| 测试类型 | 说明 | 示例测试 |
+|---------|------|---------|
+| **Smoke 测试** | 快速验证核心功能 | `test_transformers`, `test_ops` |
+| **Default 测试** | 默认测试集 | 分片运行所有设备无关测试 |
+| **Distributed 测试** | 分布式相关测试 | `distributed/test_c10d*`, `distributed/tensor/*` |
+| **Slow 测试** | 耗时较长的测试 | `test_jit`, `test_nn` (slow模式) |
+| **Inductor 测试** | 编译器相关测试 | `inductor/test_torchinductor*` |
+
+#### 8.5.2 按测试优先级分类
+
+| 优先级 | 测试类型 | 运行频率 |
+|-------|---------|---------|
+| P0 | Smoke 测试 | 每次提交 |
+| P1 | Default 测试 | 每次提交 |
+| P2 | Distributed 测试 | 每日 |
+| P3 | Slow 测试 | 每周 |
+| P4 | 性能基准测试 | 每日 |
+
+### 8.6 测试矩阵配置
+
+#### 8.6.1 默认测试矩阵
+
+```yaml
+# npu-910b.yml 测试矩阵
+test-matrix: |
+  { include: [
+    # Default 测试 - 6分片
+    { config: "default", shard: 1, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
+    { config: "default", shard: 2, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
+    { config: "default", shard: 3, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
+    { config: "default", shard: 4, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
+    { config: "default", shard: 5, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
+    { config: "default", shard: 6, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
+  ]}
+```
+
+#### 8.6.2 分布式测试矩阵
+
+```yaml
+# npu-distributed.yml 测试矩阵
+test-matrix: |
+  { include: [
+    { config: "distributed", shard: 1, num_shards: 3, runner: "linux.npu.gpu.910b.4" },
+    { config: "distributed", shard: 2, num_shards: 3, runner: "linux.npu.gpu.910b.4" },
+    { config: "distributed", shard: 3, num_shards: 3, runner: "linux.npu.gpu.910b.4" },
+  ]}
+```
+
+### 8.7 NPU 特有测试用例
+
+以下测试用例需要在 NPU 设备上运行，用于验证 NPU 特有功能：
+
+| 测试文件 | 测试内容 | 备注 |
+|---------|---------|------|
+| `test_npu.py` | NPU 核心功能测试 | 类似 `test_xpu.py` |
+| `npu/test_custom_op.py` | NPU 自定义算子测试 | NPU 特有算子 |
+| `npu/test_aclnn.py` | ACL NN 算子测试 | CANN 算子封装 |
+| `npu/test_hccl.py` | HCCL 通信测试 | 分布式通信 |
+| `npu/test_graph_mode.py` | 图模式测试 | NPU 图执行模式 |
+
+### 8.8 测试排除列表 (Blocklist)
+
+根据 XPU 和 ROCm 的经验，NPU 可能需要在以下测试中进行适配：
+
+```python
+# test/run_test.py
+
+NPU_BLOCKLIST = [
+    # 自动求导相关 (部分功能可能不支持)
+    # "test_autograd",
+
+    # Profiler 相关 (NPU profiler 实现可能不同)
+    # "profiler/test_memory_profiler",
+
+    # CUDA 特有测试 (不应在 NPU 上运行)
+    "test_cuda",
+    "test_cuda_multigpu",
+    "test_cuda_primary_ctx",
+    "test_cuda_sanitizer",
+    "test_matmul_cuda",
+    "test_scaled_matmul_cuda",
+
+    # XPU 特有测试
+    "test_xpu",
+
+    # MPS 特有测试
+    "test_mps",
+    "test_metal",
+]
+```
+
+### 8.9 测试环境变量汇总
+
+```bash
+# NPU 测试环境变量
+
+# 设备类型
+export PYTORCH_TESTING_DEVICE_ONLY_FOR="npu"
+
+# 测试配置
+export TEST_CONFIG="default"  # 或 "distributed", "slow", "smoke_npu"
+
+# 构建环境
+export BUILD_ENVIRONMENT="linux-noble-npu-cann8.1-py3.10-910b"
+
+# NPU 架构
+export NPU_ARCH="Ascend910B"
+
+# CANN 路径
+export ASCEND_HOME=/usr/local/Ascend
+export ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit
+
+# HCCL 配置 (分布式测试)
+export HCCL_CONNECT_TIMEOUT=7200
+export HCCL_EXEC_TIMEOUT=0
+```
+
+### 8.10 与其他设备测试对比
+
+| 特性 | CUDA | ROCm | XPU | **NPU** |
+|------|------|------|-----|---------|
+| Smoke 测试 | ✅ H100/B200 | ✅ MI300 | ✅ Client | ✅ 910B |
+| Default 测试 | ✅ 5-6分片 | ✅ 6分片 | ✅ 6-12分片 | ✅ 6分片 |
+| Distributed 测试 | ✅ H100×8 | ✅ MI300×4 | ❌ | ✅ 910B×4 |
+| Inductor 测试 | ✅ | ✅ | ✅ | ✅ |
+| 性能基准测试 | ✅ H100/B200 | ✅ MI300 | ✅ | ✅ 910B |
+| Slow 测试 | ✅ | ✅ | ❌ | ✅ |
+
+### 8.11 测试实施建议
+
+1. **阶段一：Smoke 测试** - 优先实现 `test_transformers` 等核心测试
+2. **阶段二：Default 测试** - 逐步覆盖所有设备无关测试
+3. **阶段三：分布式测试** - 实现 HCCL 分布式通信测试
+4. **阶段四：性能测试** - 实现 Inductor 性能基准测试
+5. **持续完善** - 根据测试结果调整 blocklist
+
+---
+
+## 九、扩展机制
+
+### 9.1 添加新设备类型
+
+参考 PyTorch 官方文档 [Note: How to extend DeviceTypeTestBase](https://github.com/pytorch/pytorch/blob/main/torch/testing/_internal/common_device_type.py#L798)：
+
+```python
+# 在 Ascend/pytorch 中创建 NPU 测试基类
+
+# 文件: torch_npu/testing/_internal/npu_test_base.py
+
+from torch.testing._internal.common_device_type import DeviceTypeTestBase
+
+class NPUTestBase(DeviceTypeTestBase):
+    device_type = "npu"
+
+    @classmethod
+    def setUpClass(cls):
+        # 初始化 NPU 环境
+        pass
+
+# 设置环境变量启用
+# export TORCH_TEST_DEVICES=/path/to/npu_test_base.py
+```
+
+### 9.2 注册测试设备
+
+```python
+# 在 Ascend/pytorch 初始化时注册
+
+import torch
+
+# 注册 NPU 模块
+torch._register_device_module('npu', torch_npu.npu)
+
+# 设置 PrivateUse1 后端 (可选)
+torch._C._set_privateuse1_backend_name("npu")
+```
