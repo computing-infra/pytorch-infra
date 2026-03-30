@@ -14,7 +14,7 @@
 │  Phase 0: 基础设施搭建（Week 1-2）                                            │
 │  ─────────────────────────────                                             │
 │  目标: 镜像体系 + 构建流程 + Runner 环境                                       │
-│  任务数: 18                                                                 │
+│  任务数: 19                                                                 │
 │  阻塞点: NPU 资源申请                                                         │
 │                                                                             │
 │  Phase 1: PR 集成验证（Week 3-4）                                             │
@@ -116,48 +116,370 @@ secrets:
 
 #### Task 0.1.3: 创建 Dockerfile 目录结构
 
-**描述**: 在仓库中创建 Dockerfile 目录和文件
+**描述**: 在仓库中创建 Dockerfile 目录和文件（借鉴 PyTorch `.ci/docker/` 模块化设计）
+
+**背景说明**:
+
+PyTorch 官方镜像构建采用模块化设计，将安装逻辑拆分为独立脚本：
+- `.ci/docker/common/install_base.sh` - 基础工具安装
+- `.ci/docker/common/install_conda.sh` - Python 环境
+- `.ci/docker/common/install_cuda.sh` - CUDA 安装
+- `.ci/docker/common/install_rocm.sh` - ROCm 安装
+
+我们借鉴此设计，创建 `dockerfiles/common/` 目录存放模块化安装脚本。
 
 **工作内容**:
 ```bash
+# 创建镜像目录
 mkdir -p dockerfiles/{base-npu,cann-npu,runner-npu,test-npu}
 
-# 创建文件:
-# dockerfiles/base-npu/Dockerfile
-# dockerfiles/base-npu/README.md
-# dockerfiles/cann-npu/Dockerfile
-# dockerfiles/cann-npu/packages/.gitkeep
-# dockerfiles/runner-npu/Dockerfile
-# dockerfiles/runner-npu/entrypoint.sh
-# dockerfiles/test-npu/Dockerfile
+# 创建模块化脚本目录（借鉴 PyTorch）
+mkdir -p dockerfiles/common
+
+# 创建 Dockerfile 文件
+touch dockerfiles/base-npu/Dockerfile
+touch dockerfiles/cann-npu/Dockerfile
+touch dockerfiles/runner-npu/Dockerfile
+touch dockerfiles/test-npu/Dockerfile
+
+# 创建模块化安装脚本
+touch dockerfiles/common/install_base.sh
+touch dockerfiles/common/install_python.sh
+touch dockerfiles/common/install_cann.sh
+touch dockerfiles/common/install_hccl.sh
+touch dockerfiles/common/install_runner.sh
+touch dockerfiles/common/common_utils.sh
+
+# 创建其他文件
+touch dockerfiles/cann-npu/packages/.gitkeep
+touch dockerfiles/runner-npu/entrypoint.sh
+chmod +x dockerfiles/runner-npu/entrypoint.sh
+```
+
+**目录结构**:
+```
+dockerfiles/
+├── base-npu/
+│   └── Dockerfile              # 基础镜像
+├── cann-npu/
+│   ├── Dockerfile              # CANN 镜像
+│   └── packages/               # CANN 安装包目录
+├── runner-npu/
+│   ├── Dockerfile              # Runner 镜像
+│   └── entrypoint.sh           # Runner 入口脚本
+├── test-npu/
+│   └── Dockerfile              # 测试镜像
+└── common/                      # 模块化安装脚本（借鉴 PyTorch）
+    ├── install_base.sh         # 基础工具安装
+    ├── install_python.sh       # Python 安装
+    ├── install_cann.sh         # CANN 安装
+    ├── install_hccl.sh         # HCCL 安装
+    ├── install_runner.sh       # Runner 安装
+    └── common_utils.sh         # 公共函数
 ```
 
 **验证标准**:
 | 验证项 | 验证方法 |
 |--------|---------|
-| 目录结构 | `ls -R dockerfiles/` 显示正确结构 |
+| 镜像目录 | `ls dockerfiles/base-npu dockerfiles/cann-npu dockerfiles/runner-npu dockerfiles/test-npu` |
+| common 目录 | `ls dockerfiles/common/` 显示 6 个脚本文件 |
 | Dockerfile 存在 | 4 个 Dockerfile 文件都存在 |
-| entrypoint.sh | 文件存在且可执行 |
+| 脚本可执行 | `ls -la dockerfiles/common/*.sh` 显示正确权限 |
 
 **预计工时**: 0.5 天
 
 ---
 
-### 0.2 Base Image 构建
+### 0.2 模块化脚本开发
 
-#### Task 0.2.1: 编写 Base Image Dockerfile
+#### Task 0.2.0: 编写公共安装脚本
 
-**描述**: 创建 Ubuntu 22.04 + Python 3.11 基础镜像 Dockerfile
+**描述**: 创建模块化安装脚本，供 Dockerfile 调用
+
+**设计原则**:
+- 参考 PyTorch `.ci/docker/common/` 脚本结构
+- 每个脚本独立可测试
+- 支持参数化配置（版本号、路径等）
+
+**工作内容**:
+
+**1. common_utils.sh - 公共函数**
+```bash
+#!/bin/bash
+# dockerfiles/common/common_utils.sh
+
+set -ex
+
+# 颜色输出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# 检查命令是否存在
+check_command() {
+    if ! command -v $1 &> /dev/null; then
+        log_error "$1 not found"
+        exit 1
+    fi
+    log_info "$1 found: $(command -v $1)"
+}
+
+# 清理 apt 缓存
+cleanup_apt() {
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+}
+```
+
+**2. install_base.sh - 基础工具安装**
+```bash
+#!/bin/bash
+# dockerfiles/common/install_base.sh
+# 参考 PyTorch .ci/docker/common/install_base.sh
+
+set -ex
+
+source common_utils.sh
+
+install_ubuntu() {
+    log_info "Installing base packages on Ubuntu..."
+
+    apt-get update
+
+    # 构建工具
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        ninja-build \
+        pkg-config
+
+    # 版本控制和网络
+    apt-get install -y --no-install-recommends \
+        git \
+        curl \
+        wget \
+        ca-certificates
+
+    # 开发库
+    apt-get install -y --no-install-recommends \
+        libssl-dev \
+        libyaml-dev \
+        libz-dev \
+        libffi-dev
+
+    # 缓存和工具
+    apt-get install -y --no-install-recommends \
+        ccache \
+        jq \
+        sudo \
+        vim \
+        gdb \
+        bc
+
+    cleanup_apt
+
+    log_info "Base packages installed successfully"
+}
+
+install_ubuntu
+```
+
+**3. install_python.sh - Python 安装**
+```bash
+#!/bin/bash
+# dockerfiles/common/install_python.sh
+# 安装系统 Python（非 Conda，更适合 CANN 环境）
+
+set -ex
+
+source common_utils.sh
+
+PYTHON_VERSION=${1:-3.11}
+
+install_python() {
+    log_info "Installing Python ${PYTHON_VERSION}..."
+
+    # 添加 deadsnakes PPA
+    apt-get update
+    apt-get install -y software-properties-common
+    add-apt-repository -y ppa:deadsnakes/ppa
+
+    # 安装 Python
+    apt-get install -y --no-install-recommends \
+        python${PYTHON_VERSION} \
+        python${PYTHON_VERSION}-dev \
+        python${PYTHON_VERSION}-venv \
+        python${PYTHON_VERSION}-distutils
+
+    cleanup_apt
+
+    # 创建符号链接
+    ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3
+    ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python
+
+    # 安装 pip
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python${PYTHON_VERSION}
+
+    log_info "Python ${PYTHON_VERSION} installed: $(python --version)"
+}
+
+install_python
+```
+
+**4. install_cann.sh - CANN 安装**
+```bash
+#!/bin/bash
+# dockerfiles/common/install_cann.sh
+
+set -ex
+
+source common_utils.sh
+
+CANN_VERSION=${1:-8.0.RC1}
+CANN_INSTALL_PATH=${2:-/usr/local/Ascend}
+
+install_cann() {
+    log_info "Installing CANN ${CANN_VERSION}..."
+
+    # 检查安装包
+    CANN_PKG="/tmp/Ascend-cann-toolkit_${CANN_VERSION}_linux-x86_64.run"
+
+    if [[ ! -f "$CANN_PKG" ]]; then
+        log_error "CANN package not found: $CANN_PKG"
+        log_info "Please download from: https://www.hiascend.com/developer/download/community"
+        exit 1
+    fi
+
+    # 安装
+    chmod +x $CANN_PKG
+    mkdir -p ${CANN_INSTALL_PATH}
+    $CANN_PKG --install --install-path=${CANN_INSTALL_PATH}
+
+    # 设置环境变量
+    echo "source ${CANN_INSTALL_PATH}/bin/setenv.bash" >> /etc/bash.bashrc
+
+    log_info "CANN ${CANN_VERSION} installed to ${CANN_INSTALL_PATH}"
+}
+
+install_cann
+```
+
+**5. install_runner.sh - GitHub Runner 安装**
+```bash
+#!/bin/bash
+# dockerfiles/common/install_runner.sh
+
+set -ex
+
+source common_utils.sh
+
+RUNNER_VERSION=${1:-2.311.0}
+RUNNER_USER=${2:-runner}
+
+install_runner() {
+    log_info "Installing GitHub Actions Runner ${RUNNER_VERSION}..."
+
+    # 创建用户
+    useradd -m -s /bin/bash ${RUNNER_USER}
+
+    # 下载 Runner
+    RUNNER_DIR=/home/${RUNNER_USER}
+    cd ${RUNNER_DIR}
+
+    curl -o actions-runner.tar.gz -L \
+        https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz
+
+    tar xzf actions-runner.tar.gz
+    rm actions-runner.tar.gz
+
+    # 安装依赖
+    ./bin/installdependencies.sh
+
+    # 设置权限
+    chown -R ${RUNNER_USER}:${RUNNER_USER} ${RUNNER_DIR}
+
+    log_info "GitHub Runner ${RUNNER_VERSION} installed to ${RUNNER_DIR}"
+}
+
+install_runner
+```
+
+**验证标准**:
+| 验证项 | 验证方法 |
+|--------|---------|
+| common_utils.sh | `bash -n dockerfiles/common/common_utils.sh` 无语法错误 |
+| install_base.sh | 在 Ubuntu 容器中测试执行 |
+| install_python.sh | 测试安装后 `python --version` 显示正确版本 |
+| 脚本权限 | 所有脚本有执行权限 |
+
+**预计工时**: 1 天
+
+---
+
+### 0.3 Base Image 构建
+
+#### Task 0.3.1: 编写 Base Image Dockerfile
+
+**描述**: 创建 Ubuntu 22.04 + Python 3.11 基础镜像 Dockerfile（借鉴 PyTorch 模块化设计）
+
+**背景说明**:
+
+参考 PyTorch `.ci/docker/ubuntu/Dockerfile` 设计：
+- 使用 `ARG` 参数化版本
+- 调用 `common/` 目录下的模块化脚本
+- 设置 `BUILD_ENVIRONMENT` 环境变量标识
 
 **工作内容**:
 ```dockerfile
 # dockerfiles/base-npu/Dockerfile
-FROM ubuntu:22.04
+# 参考 PyTorch .ci/docker/ubuntu/Dockerfile 设计
+# 使用系统 Python（非 Conda），更适合 CANN 环境
 
-# 安装基础工具
-# 安装 Python 3.11
-# 安装 ccache
+ARG UBUNTU_VERSION=22.04
+FROM ubuntu:${UBUNTU_VERSION} as base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 允许 APT 以 root 运行（借鉴 PyTorch）
+RUN echo 'APT::Sandbox::User "root";' | tee -a /etc/apt/apt.conf.d/10sandbox
+
+# 复制安装脚本
+COPY common/install_base.sh /tmp/install_base.sh
+COPY common/install_python.sh /tmp/install_python.sh
+COPY common/common_utils.sh /tmp/common_utils.sh
+
+# 安装基础依赖
+RUN cd /tmp && bash ./install_base.sh && rm -f install_base.sh
+
+# 安装 Python
+ARG PYTHON_VERSION=3.11
+RUN cd /tmp && bash ./install_python.sh ${PYTHON_VERSION} && rm -f install_python.sh common_utils.sh
+
+# 配置 ccache
+ENV CCACHE_DIR=/cache/ccache
+ENV CCACHE_MAXSIZE=5G
+RUN mkdir -p /cache/ccache /cache/pip
+
+# 设置 PATH
+ENV PATH="/usr/local/bin:/usr/bin:${PATH}"
+
 # 创建工作目录
+WORKDIR /workspace
+
+# 设置镜像标识（借鉴 PyTorch BUILD_ENVIRONMENT）
+ARG BUILD_ENVIRONMENT=base-npu
+ENV BUILD_ENVIRONMENT=${BUILD_ENVIRONMENT}
+
+# 版本信息
+RUN python --version && pip --version
 ```
 
 **验证标准**:
@@ -167,13 +489,14 @@ FROM ubuntu:22.04
 | Python 版本 | `docker run base-npu:test python --version` 显示 3.11.x |
 | pip 可用 | `docker run base-npu:test pip --version` 成功 |
 | ccache 可用 | `docker run base-npu:test ccache --version` 成功 |
+| BUILD_ENVIRONMENT | `docker run base-npu:test env \| grep BUILD_ENVIRONMENT` 显示 base-npu |
 | 镜像大小 | < 500MB |
 
 **预计工时**: 1 天
 
 ---
 
-#### Task 0.2.2: 创建 Base Image 构建 Workflow
+#### Task 0.3.2: 创建 Base Image 构建 Workflow
 
 **描述**: 创建 `.github/workflows/build-base-image.yml`
 
@@ -198,9 +521,9 @@ FROM ubuntu:22.04
 
 ---
 
-### 0.3 CANN Image 构建
+### 0.4 CANN Image 构建
 
-#### Task 0.3.1: 编写 CANN Image Dockerfile
+#### Task 0.4.1: 编写 CANN Image Dockerfile
 
 **描述**: 创建包含 CANN Toolkit 的镜像 Dockerfile
 
@@ -210,12 +533,26 @@ FROM ubuntu:22.04
 ARG BASE_IMAGE=base-npu:latest
 FROM ${BASE_IMAGE}
 
-# 安装 CANN Toolkit
-# 安装 HCCL
-# 设置环境变量
+# 复制 CANN 安装包（需提前下载）
+COPY packages/*.run /tmp/
+
+# 复制安装脚本
+COPY common/install_cann.sh /tmp/install_cann.sh
+COPY common/install_hccl.sh /tmp/install_hccl.sh
+COPY common/common_utils.sh /tmp/common_utils.sh
+
+# 安装 CANN
+ARG CANN_VERSION=8.0.RC1
+RUN cd /tmp && bash ./install_cann.sh ${CANN_VERSION} && rm -f install_cann.sh
+
+# 设置 CANN 环境变量
+ENV ASCEND_HOME=/usr/local/Ascend
+ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit
+ENV PATH="${ASCEND_TOOLKIT_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${ASCEND_TOOLKIT_HOME}/lib64:${LD_LIBRARY_PATH}"
 ```
 
-**前置条件**: Task 0.2.1 完成，有可用的 Base Image
+**前置条件**: Task 0.3.1 完成，有可用的 Base Image
 
 **验证标准**:
 | 验证项 | 验证方法 |
@@ -230,7 +567,7 @@ FROM ${BASE_IMAGE}
 
 ---
 
-#### Task 0.3.2: 创建 CANN Image 构建 Workflow
+#### Task 0.4.2: 创建 CANN Image 构建 Workflow
 
 **描述**: 创建 `.github/workflows/build-cann-image.yml`
 
@@ -255,9 +592,9 @@ FROM ${BASE_IMAGE}
 
 ---
 
-### 0.4 Runner Image 构建
+### 0.5 Runner Image 构建
 
-#### Task 0.4.1: 编写 Runner Image Dockerfile
+#### Task 0.5.1: 编写 Runner Image Dockerfile
 
 **描述**: 创建包含 GitHub Actions Runner 的镜像 Dockerfile
 
@@ -272,7 +609,7 @@ FROM ${CANN_IMAGE}
 # 创建 runner 用户
 ```
 
-**前置条件**: Task 0.3.1 完成，有可用的 CANN Image
+**前置条件**: Task 0.4.1 完成，有可用的 CANN Image
 
 **验证标准**:
 | 验证项 | 验证方法 |
@@ -285,7 +622,7 @@ FROM ${CANN_IMAGE}
 
 ---
 
-#### Task 0.4.2: 编写 Runner entrypoint 脚本
+#### Task 0.5.2: 编写 Runner entrypoint 脚本
 
 **描述**: 创建 Runner 启动入口脚本
 
@@ -310,7 +647,7 @@ FROM ${CANN_IMAGE}
 
 ---
 
-#### Task 0.4.3: 创建 Runner Image 构建 Workflow
+#### Task 0.5.3: 创建 Runner Image 构建 Workflow
 
 **描述**: 创建 `.github/workflows/build-runner-image.yml`
 
@@ -334,9 +671,9 @@ FROM ${CANN_IMAGE}
 
 ---
 
-### 0.5 Test Image 构建
+### 0.6 Test Image 构建
 
-#### Task 0.5.1: 编写 Test Image Dockerfile
+#### Task 0.6.1: 编写 Test Image Dockerfile
 
 **描述**: 创建包含 PyTorch + torch-npu 的测试镜像 Dockerfile
 
@@ -351,7 +688,7 @@ FROM ${RUNNER_IMAGE}
 # 安装测试依赖
 ```
 
-**前置条件**: Task 0.4.1 完成，有可用的 Runner Image
+**前置条件**: Task 0.5.1 完成，有可用的 Runner Image
 
 **验证标准**:
 | 验证项 | 验证方法 |
@@ -364,7 +701,7 @@ FROM ${RUNNER_IMAGE}
 
 ---
 
-#### Task 0.5.2: 创建 Test Image 构建 Workflow
+#### Task 0.6.2: 创建 Test Image 构建 Workflow
 
 **描述**: 创建 `.github/workflows/build-test-image.yml`
 
@@ -390,9 +727,9 @@ FROM ${RUNNER_IMAGE}
 
 ---
 
-### 0.6 兼容性矩阵管理
+### 0.7 兼容性矩阵管理
 
-#### Task 0.6.1: 创建兼容性矩阵文件
+#### Task 0.7.1: 创建兼容性矩阵文件
 
 **描述**: 创建 `compatibility_matrix.json` 文件用于记录版本兼容关系
 
@@ -418,7 +755,7 @@ FROM ${RUNNER_IMAGE}
 
 ---
 
-#### Task 0.6.2: 创建兼容性验证 Workflow
+#### Task 0.7.2: 创建兼容性验证 Workflow
 
 **描述**: 创建 `.github/workflows/verify-compatibility.yml`
 
@@ -442,9 +779,9 @@ FROM ${RUNNER_IMAGE}
 
 ---
 
-### 0.7 镜像清理
+### 0.8 镜像清理
 
-#### Task 0.7.1: 创建镜像清理 Workflow
+#### Task 0.8.1: 创建镜像清理 Workflow
 
 **描述**: 创建 `.github/workflows/cleanup-images.yml`
 
@@ -465,9 +802,9 @@ FROM ${RUNNER_IMAGE}
 
 ---
 
-### 0.8 Runner 环境配置
+### 0.9 Runner 环境配置
 
-#### Task 0.8.1: 申请 NPU 资源
+#### Task 0.9.1: 申请 NPU 资源
 
 **描述**: 申请 NPU Runner 运行所需的硬件资源
 
@@ -495,7 +832,7 @@ FROM ${RUNNER_IMAGE}
 
 ---
 
-#### Task 0.8.2: 安装 GitHub Actions Runner
+#### Task 0.9.2: 安装 GitHub Actions Runner
 
 **描述**: 在 NPU 机器上安装和配置 GitHub Actions Runner
 
@@ -531,7 +868,7 @@ docker run -d \
 
 ---
 
-#### Task 0.8.3: 配置 NPU 设备权限
+#### Task 0.9.3: 配置 NPU 设备权限
 
 **描述**: 配置 NPU 设备的访问权限，确保 Runner 进程可以访问
 
@@ -1186,12 +1523,12 @@ jobs:
 
 | Phase | 任务数 | 预计工时 | 关键阻塞点 |
 |-------|--------|---------|-----------|
-| Phase 0 | 18 | 10 天 | NPU 资源申请 |
+| Phase 0 | 19 | 11 天 | NPU 资源申请 |
 | Phase 1 | 12 | 5 天 | Phase 0 完成 |
 | Phase 2 | 8 | 3 天 | Smoke 测试通过 |
 | Phase 3 | 6 | 3 天 | Phase 2 完成 |
 | Phase 4 | TBD | TBD | Phase 3 稳定 |
-| **总计** | **44+** | **21+ 天** | |
+| **总计** | **45+** | **22+ 天** | |
 
 ---
 
