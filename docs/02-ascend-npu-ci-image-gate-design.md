@@ -1,1163 +1,1487 @@
-# Ascend NPU CI 镜像和门禁方案设计文档
+# Ascend NPU CI 集成验证方案设计文档
 
-## 概述
+## 项目定位与目标
 
-本文档基于 PyTorch 官方仓库中 ROCm 和 XPU 的镜像和门禁方案，为 Ascend NPU 设备设计 CI/CD 镜像构建和门禁方案。
+### 1.1 项目背景
 
----
+torch-npu 作为 PyTorch 的 NPU 设备扩展模块，存储在独立仓库 `Ascend/pytorch` 中，而非 PyTorch 主社区仓库。与 NVIDIA CUDA、AMD ROCm、Intel XPU 等设备不同，NPU 的适配代码不在 PyTorch 主仓，因此需要独立的 CI 机制来验证 torch-npu 与 PyTorch 的兼容性。
 
-## 一、镜像设计方案
-
-### 1.1 目录结构
-
-```
-.ci/docker/
-├── ubuntu-npu/
-│   └── Dockerfile                    # NPU专用Dockerfile
-│
-├── common/
-│   ├── install_npu.sh               # NPU驱动+CANN安装脚本
-│   ├── install_npu_magma.sh         # NPU版MAGMA安装 (可选)
-│   └── install_npu_acl.sh           # ACL库安装 (可选)
-│
-├── ci_commit_pins/
-│   ├── ascend.txt                   # CANN版本pin
-│   ├── triton-npu.txt               # Triton-NPU版本pin (如果有)
-│   └── hccl.txt                     # HCCL版本pin
-│
-└── triton_npu_version.txt           # Triton-NPU版本号
-```
-
-### 1.2 镜像版本规划
-
-| 镜像名称 | CANN版本 | Python | GCC | Ubuntu | Driver类型 | 用途 |
-|---------|---------|--------|-----|--------|-----------|------|
-| `pytorch-linux-jammy-npu-cann8.0-py3.10-gcc11` | 8.0.RC1 | 3.10 | 11 | 22.04 | LTS | 兼容性构建 |
-| `pytorch-linux-noble-npu-cann8.1-py3.10-gcc13` | 8.1.0 | 3.10 | 13 | 24.04 | LTS | **主力构建版本** |
-| `pytorch-linux-noble-npu-cann8.1-py3.12-gcc13` | 8.1.0 | 3.12 | 13 | 24.04 | LTS | Python 3.12支持 |
-| `pytorch-linux-noble-npu-cann8.1-py3.10-gcc13-benchmarks` | 8.1.0 | 3.10 | 13 | 24.04 | LTS | 性能基准测试 |
-| `pytorch-linux-noble-npu-cann-nightly-py3.10-gcc13` | nightly | 3.10 | 13 | 24.04 | RELEASE | Nightly测试 |
-
-### 1.3 NPU架构规划
-
-| 架构代号 | 产品名称 | 类型 | Runner建议 |
-|--------|---------|------|-----------|
-| Ascend910A | 910A | 训练 | `linux.npu.gpu.910a` |
-| Ascend910B | 910B/B1/B2/B3/B4 | 训练 | `linux.npu.gpu.910b` |
-| Ascend310P | 310P | 推理 | `linux.npu.gpu.310p` |
-
-### 1.4 Dockerfile 设计
-
-```dockerfile
-# .ci/docker/ubuntu-npu/Dockerfile
-
-ARG UBUNTU_VERSION
-FROM ubuntu:${UBUNTU_VERSION}
-
-ARG UBUNTU_VERSION
-ENV DEBIAN_FRONTEND noninteractive
-
-# 设置NPU目标架构
-ARG NPU_ARCH
-ENV NPU_ARCH ${NPU_ARCH}
-
-# 安装基础依赖
-COPY ./common/install_base.sh install_base.sh
-RUN bash ./install_base.sh && rm install_base.sh
-
-# 安装用户
-COPY ./common/install_user.sh install_user.sh
-RUN bash ./install_user.sh && rm install_user.sh
-
-# 安装katex (文档)
-ARG KATEX
-COPY ./common/install_docs_reqs.sh install_docs_reqs.sh
-RUN bash ./install_docs_reqs.sh && rm install_docs_reqs.sh
-
-# 安装conda和Python
-ARG ANACONDA_PYTHON_VERSION
-ARG DOCS
-ENV ANACONDA_PYTHON_VERSION=$ANACONDA_PYTHON_VERSION
-ENV PATH /opt/conda/envs/py_$ANACONDA_PYTHON_VERSION/bin:/opt/conda/bin:$PATH
-ENV DOCS=$DOCS
-COPY requirements-ci.txt requirements-docs.txt /opt/conda/
-COPY ./common/install_conda.sh install_conda.sh
-COPY ./common/common_utils.sh common_utils.sh
-RUN bash ./install_conda.sh && rm install_conda.sh common_utils.sh
-
-# 安装GCC
-ARG GCC_VERSION
-COPY ./common/install_gcc.sh install_gcc.sh
-RUN bash ./install_gcc.sh && rm install_gcc.sh
-
-# 安装lcov (代码覆盖率)
-COPY ./common/install_lcov.sh install_lcov.sh
-RUN bash ./install_lcov.sh && rm install_lcov.sh
-
-# 安装OpenSSL
-COPY ./common/install_openssl.sh install_openssl.sh
-RUN bash ./install_openssl.sh
-ENV OPENSSL_ROOT_DIR /opt/openssl
-ENV OPENSSL_DIR /opt/openssl
-RUN rm install_openssl.sh
-
-# ========== NPU核心组件安装 ==========
-ARG NPU_VERSION
-ARG NPU_DRIVER_TYPE
-ENV NPU_VERSION=${NPU_VERSION}
-ENV NPU_DRIVER_TYPE=${NPU_DRIVER_TYPE}
-
-COPY ./common/install_npu.sh install_npu.sh
-RUN bash ./install_npu.sh && rm install_npu.sh
-
-# 安装Triton-NPU (如果有)
-ARG TRITON
-COPY ./common/install_triton.sh install_triton.sh
-COPY ./common/common_utils.sh common_utils.sh
-COPY ci_commit_pins/triton-npu.txt triton-npu.txt
-COPY triton_npu_version.txt triton_version.txt
-RUN if [ -n "${TRITON}" ]; then bash ./install_triton.sh; fi
-RUN rm install_triton.sh common_utils.sh triton-npu.txt triton_version.txt
-
-# 安装Vision包
-ARG VISION
-COPY ./common/install_vision.sh ./common/cache_vision_models.sh ./common/common_utils.sh ./
-RUN if [ -n "${VISION}" ]; then bash ./install_vision.sh; fi
-RUN rm install_vision.sh cache_vision_models.sh common_utils.sh
-ENV INSTALLED_VISION ${VISION}
-
-# 安装Ninja
-ARG NINJA_VERSION
-COPY ./common/install_ninja.sh install_ninja.sh
-RUN if [ -n "${NINJA_VERSION}" ]; then bash ./install_ninja.sh; fi
-RUN rm install_ninja.sh
-
-# 安装性能基准测试依赖
-ARG INDUCTOR_BENCHMARKS
-COPY ./common/install_inductor_benchmark_deps.sh install_inductor_benchmark_deps.sh
-COPY ./common/common_utils.sh common_utils.sh
-COPY ci_commit_pins/huggingface-requirements.txt huggingface-requirements.txt
-COPY ci_commit_pins/timm.txt timm.txt
-COPY ci_commit_pins/torchbench.txt torchbench.txt
-ENV BUILD_AOT_INDUCTOR_TEST ${INDUCTOR_BENCHMARKS}
-RUN if [ -n "${INDUCTOR_BENCHMARKS}" ]; then bash ./install_inductor_benchmark_deps.sh; fi
-RUN rm install_inductor_benchmark_deps.sh common_utils.sh
-
-# 安装ccache/sccache
-COPY ./common/install_cache.sh install_cache.sh
-ENV PATH /opt/cache/bin:$PATH
-RUN bash ./install_cache.sh && rm install_cache.sh
-
-# 设置环境变量
-ARG BUILD_ENVIRONMENT
-ENV BUILD_ENVIRONMENT ${BUILD_ENVIRONMENT}
-
-# 安装LLVM (可选)
-COPY --from=pytorch/llvm:9.0.1 /opt/llvm /opt/llvm
-
-USER jenkins
-CMD ["bash"]
-```
-
-### 1.5 install_npu.sh 脚本设计
-
-```bash
-#!/bin/bash
-# .ci/docker/common/install_npu.sh
-#
-# 参考: install_xpu.sh, install_rocm.sh
-
-set -xe
-
-# NPU版本映射
-declare -A CANN_VERSIONS=(
-    ["8.0"]="8.0.RC1"
-    ["8.1"]="8.1.0"
-    ["8.2"]="8.2.0"
-    ["nightly"]="nightly"
-)
-
-# Driver类型
-# LTS: 长期支持版本
-# RELEASE: 最新发布版本
-
-function install_ubuntu() {
-    . /etc/os-release
-
-    # 支持的Ubuntu版本
-    if [[ ! " jammy noble " =~ " ${VERSION_CODENAME} " ]]; then
-        echo "Ubuntu version ${VERSION_CODENAME} not supported"
-        exit 1
-    fi
-
-    apt-get update -y
-    apt-get install -y wget gpg-agent
-
-    # ========== 安装NPU驱动 ==========
-    if [[ "${NPU_DRIVER_TYPE,,}" == "lts" ]]; then
-        # LTS驱动版本
-        NPU_DRIVER_REPO="https://repo.huaweicloud.com/kunpeng-pkg/kunpeng-sc/mainline"
-    else
-        # RELEASE版本
-        NPU_DRIVER_REPO="https://repo.huaweicloud.com/kunpeng-pkg/kunpeng-sc/release"
-    fi
-
-    # 添加华为仓库
-    wget -qO - ${NPU_DRIVER_REPO}/kunpeng-sc.key | gpg --dearmor --output /usr/share/keyrings/kunpeng-sc.gpg
-    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/kunpeng-sc.gpg] ${NPU_DRIVER_REPO}/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/kunpeng-sc.list
-
-    apt-get update
-
-    # 安装NPU驱动和固件
-    apt-get install -y \
-        ascend-driver \
-        ascend-firmware \
-        npu-smi
-
-    # ========== 安装CANN ==========
-    if [[ "${NPU_VERSION}" == "nightly" ]]; then
-        # Nightly版本安装
-        CANN_URL="https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/latest/Ascend-cann-toolkit_latest_linux.arm64.run"
-    else
-        # 正式版本安装
-        CANN_VER="${CANN_VERSIONS[${NPU_VERSION}]}"
-        CANN_URL="https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/${CANN_VER}/Ascend-cann-toolkit_${CANN_VER}_linux.arm64.run"
-    fi
-
-    wget -qO /tmp/cann-toolkit.run "${CANN_URL}"
-    chmod +x /tmp/cann-toolkit.run
-    /tmp/cann-toolkit.run --install --install-path=/usr/local/Ascend
-    rm -f /tmp/cann-toolkit.run
-
-    # 安装HCCL (分布式通信库)
-    apt-get install -y hccl
-
-    # 安装ATB (Ascend Tensor Boost)
-    apt-get install -y atb
-
-    # ========== 设置环境变量 ==========
-    cat > /etc/npu_env.sh << 'EOF'
-# CANN路径
-export ASCEND_HOME=/usr/local/Ascend
-export ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit
-export ASCEND_HOME_PATH=/usr/local/Ascend
-export PATH=/usr/local/Ascend/bin:/usr/local/Ascend/compiler/ccec_compiler/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/Ascend/lib64:/usr/local/Ascend/ascend-toolkit/lib64:$LD_LIBRARY_PATH
-
-# NPU架构
-export NPU_ARCH="${NPU_ARCH}"
-export ASCEND_CUSTOM_PATH=/usr/local/Ascend
-
-# TIK编译器
-export TIK_COMPILER_PATH=/usr/local/Ascend/ascend-toolkit/compiler/tikcpp
-EOF
-
-    # 追加到bashrc
-    echo "source /etc/npu_env.sh" >> /etc/bash.bashrc
-
-    # 清理
-    apt-get autoclean && apt-get clean
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-}
-
-# ========== 主入口 ==========
-ID=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
-case "$ID" in
-    ubuntu)
-        install_ubuntu
-        ;;
-    *)
-        echo "Unsupported OS: $ID"
-        exit 1
-        ;;
-esac
-```
-
-### 1.6 build.sh 配置新增
-
-```bash
-# .ci/docker/build.sh 新增配置
-
-# Dockerfile选择
-if [[ "$image" == *npu* ]]; then
-    DOCKERFILE="${OS}-npu/Dockerfile"
-fi
-
-# 镜像配置
-case "$tag" in
-    pytorch-linux-jammy-npu-cann8.0-py3.10-gcc11)
-        ANACONDA_PYTHON_VERSION=3.10
-        GCC_VERSION=11
-        VISION=yes
-        NPU_VERSION=8.0
-        NPU_DRIVER_TYPE=LTS
-        NPU_ARCH="Ascend910A;Ascend910B"
-        NINJA_VERSION=1.9.0
-        TRITON=yes  # 如果有Triton-NPU
-        KATEX=yes
-        ;;
-
-    pytorch-linux-noble-npu-cann8.1-py3.10-gcc13)
-        ANACONDA_PYTHON_VERSION=3.10
-        GCC_VERSION=13
-        VISION=yes
-        NPU_VERSION=8.1
-        NPU_DRIVER_TYPE=LTS
-        NPU_ARCH="Ascend910A;Ascend910B;Ascend910B1;Ascend910B2;Ascend910B3;Ascend910B4"
-        NINJA_VERSION=1.9.0
-        TRITON=yes
-        KATEX=yes
-        ;;
-
-    pytorch-linux-noble-npu-cann8.1-py3.12-gcc13)
-        ANACONDA_PYTHON_VERSION=3.12
-        GCC_VERSION=13
-        VISION=yes
-        NPU_VERSION=8.1
-        NPU_DRIVER_TYPE=LTS
-        NPU_ARCH="Ascend910B"
-        NINJA_VERSION=1.9.0
-        TRITON=yes
-        ;;
-
-    pytorch-linux-noble-npu-cann8.1-py3.10-gcc13-benchmarks)
-        ANACONDA_PYTHON_VERSION=3.10
-        GCC_VERSION=13
-        VISION=yes
-        NPU_VERSION=8.1
-        NPU_DRIVER_TYPE=LTS
-        NPU_ARCH="Ascend910B"
-        INDUCTOR_BENCHMARKS=yes
-        NINJA_VERSION=1.9.0
-        TRITON=yes
-        ;;
-
-    pytorch-linux-noble-npu-cann-nightly-py3.10-gcc13)
-        ANACONDA_PYTHON_VERSION=3.10
-        GCC_VERSION=13
-        VISION=yes
-        NPU_VERSION=nightly
-        NPU_DRIVER_TYPE=RELEASE
-        NPU_ARCH="Ascend910B"
-        NINJA_VERSION=1.9.0
-        TRITON=yes
-        ;;
-esac
-
-# Docker build参数
---build-arg "NPU_VERSION=${NPU_VERSION}" \
---build-arg "NPU_DRIVER_TYPE=${NPU_DRIVER_TYPE}" \
---build-arg "NPU_ARCH=${NPU_ARCH}" \
-```
-
----
-
-## 二、门禁方案设计
-
-### 2.1 Workflow 设计
+### 1.2 中间 CI 仓库定位
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        NPU CI/CD Workflow 架构                               │
+│                     torch-npu ↔ pytorch 集成验证架构                           │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │
-│  │ 主构建测试        │  │ 分布式测试       │  │ 性能测试          │         │
-│  ├──────────────────┤  ├──────────────────┤  ├──────────────────┤         │
-│  │ npu-910b.yml     │  │ npu-distributed  │  │ inductor-perf-*  │         │
-│  │ npu-310p.yml     │  │ .yml             │  │ -nightly-npu.yml │         │
-│  │                  │  │                  │  │                  │         │
-│  └──────────────────┘  └──────────────────┘  └──────────────────┘         │
-│           │                    │                     │                    │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │
-│  │ Smoke测试        │  │ Slow测试         │  │ Nightly构建      │         │
-│  ├──────────────────┤  ├──────────────────┤  ├──────────────────┤         │
-│  │ npu-smoke.yml    │  │ slow-npu.yml     │  │ npu-nightly.yml  │         │
-│  └──────────────────┘  └──────────────────┘  └──────────────────┘         │
+│  ┌──────────────────┐         ┌──────────────────┐         ┌─────────────┐ │
+│  │  Ascend/pytorch  │         │  pytorch-infra   │         │ pytorch/main │ │
+│  │  (torch-npu)     │────────▶│  (中间CI仓库)     │◀────────│ (PyTorch官方) │ │
+│  │                  │         │                  │         │             │ │
+│  │  - NPU适配代码   │         │  - PR门禁触发    │         │ - nightly    │ │
+│  │  - NPU算子实现   │         │  - 集成验证      │         │ - main分支   │ │
+│  │  - NPU测试用例   │         │  - 结果追踪      │         │ - 设备测试   │ │
+│  └──────────────────┘         └──────────────────┘         └─────────────┘ │
+│                                                                             │
+│  工作流程：                                                                  │
+│  1. torch-npu PR 提交 → pytorch-infra 触发门禁                               │
+│  2. pytorch-infra 拉取 PyTorch nightly                                      │
+│  3. 构建 torch-npu + PyTorch nightly                                        │
+│  4. 运行 NPU 测试（类似 CUDA/ROCm/XPU 在主仓的测试）                          │
+│  5. 结果反馈到 torch-npu PR                                                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Workflow 文件设计
+### 1.3 核心目标
 
-#### 2.2.1 主构建测试 (npu-910b.yml)
+| 目标 | 说明 | 阶段 |
+|------|------|------|
+| **PR 集成验证** | torch-npu PR 自动触发与 PyTorch nightly 的集成测试 | 第一阶段 |
+| **快速反馈** | 开发者提交后 30-60 分钟内获得测试结果 | 第一阶段 |
+| **兼容性保障** | 及时发现 torch-npu 与 PyTorch API 的兼容问题 | 第一阶段 |
+| **类主仓体验** | 提供类似 CUDA/ROCm 在 PyTorch 主仓的门禁体验 | 第一阶段 |
+| **多架构测试** | 支持 910A/910B/310P 多种 NPU 架构 | 第二阶段 |
+| **分布式测试** | HCCL 分布式训练验证 | 第二阶段 |
+| **性能基准** | Inductor 性能回归检测 | 第三阶段 |
 
-```yaml
-# .github/workflows/npu-910b.yml
+### 1.4 与其他设备的对比
 
-name: npu-910b
+| 设备 | 适配代码位置 | CI 触发方式 | 集成验证模式 |
+|------|------------|------------|------------|
+| **CUDA** | PyTorch 主仓 | PR + 定时 | 主仓直接测试 |
+| **ROCm** | PyTorch 主仓 | PR + 定时 | 主仓直接测试 |
+| **XPU** | PyTorch 主仓 | PR + 定时 | 主仓直接测试 |
+| **NPU** | torch-npu 独立仓库 | 需要设计 | **中间 CI 仓库验证** |
 
-on:
-  push:
-    branches:
-      - main
-      - release/*
-    tags:
-      - ciflow/npu-910b/*
-      - ciflow/npu/*
-  workflow_dispatch:
-  schedule:
-    - cron: 0 0,6,12,18 * * *  # 每6小时运行
+NPU 的特殊之处在于代码不在主仓，因此需要通过中间 CI 仓库来实现类似主仓的集成验证体验。
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.ref_type == 'branch' && github.sha }}-${{ github.event_name == 'workflow_dispatch' }}-${{ github.event_name == 'schedule' }}
-  cancel-in-progress: true
+---
 
-permissions:
-  id-token: write
-  contents: read
-  actions: read
+## 二、镜像体系设计
 
-jobs:
-  get-label-type:
-    if: github.repository_owner == 'pytorch'
-    name: get-label-type
-    uses: pytorch/pytorch/.github/workflows/_runner-determinator.yml@main
-    with:
-      triggering_actor: ${{ github.triggering_actor }}
-      issue_owner: ${{ github.event.pull_request.user.login || github.event.issue.user.login }}
-      curr_branch: ${{ github.head_ref || github.ref_name }}
-      curr_ref_type: ${{ github.ref_type }}
+### 2.1 镜像分层架构
 
-  target-determination:
-    if: github.repository_owner == 'pytorch'
-    name: before-test
-    uses: ./.github/workflows/target_determination.yml
+CI 集成验证依赖稳定的镜像体系，确保每次测试环境一致、可复现。
 
-  linux-noble-npu-cann8_1-py3_10-build:
-    if: github.repository_owner == 'pytorch'
-    name: linux-noble-npu-cann8.1-py3.10
-    uses: ./.github/workflows/_linux-build.yml
-    needs: get-label-type
-    with:
-      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
-      build-environment: linux-noble-npu-cann8.1-py3.10-910b
-      docker-image-name: ci-image:pytorch-linux-noble-npu-cann8.1-py3.10-gcc13
-      runner: linux.c7i.12xlarge
-      test-matrix: |
-        { include: [
-          { config: "default", shard: 1, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-          { config: "default", shard: 2, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-          { config: "default", shard: 3, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-          { config: "default", shard: 4, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-          { config: "default", shard: 5, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-          { config: "default", shard: 6, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-        ]}
-    secrets: inherit
-
-  linux-noble-npu-cann8_1-py3_10-test:
-    permissions:
-      id-token: write
-      contents: read
-    name: linux-noble-npu-cann8.1-py3.10
-    uses: ./.github/workflows/_npu-test.yml
-    needs:
-      - linux-noble-npu-cann8_1-py3_10-build
-      - target-determination
-    with:
-      build-environment: ${{ needs.linux-noble-npu-cann8_1-py3_10-build.outputs.build-environment }}
-      docker-image: ${{ needs.linux-noble-npu-cann8_1-py3_10-build.outputs.docker-image }}
-      test-matrix: ${{ needs.linux-noble-npu-cann8_1-py3_10-build.outputs.test-matrix }}
-    secrets: inherit
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         镜像分层架构                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Layer 1: Base Image (基础层)                                                │
+│  ─────────────────────────────────                                         │
+│  作用: 提供操作系统和基础工具，作为所有镜像的起点                               │
+│  内容:                                                                       │
+│    - Ubuntu 22.04 LTS                                                       │
+│    - Python 3.11 (官方构建)                                                  │
+│    - 基础工具: git, curl, wget, build-essential                              │
+│    - Docker 客户端                                                          │
+│  更新频率: 每 6 个月或安全更新时                                               │
+│  镜像示例: base-npu:ubuntu22.04-py311                                       │
+│                                                                             │
+│  Layer 2: CANN Image (驱动层)                                                │
+│  ─────────────────────────────────                                         │
+│  作用: 提供 NPU 驱动和 CANN 软件栈                                            │
+│  内容:                                                                       │
+│    - CANN Toolkit (对应版本)                                                 │
+│    - NPU 驱动固件                                                           │
+│    - HCCL (分布式通信库)                                                     │
+│    - ATB (算子加速库)                                                        │
+│  更新频率: CANN 版本发布时                                                    │
+│  镜像示例: cann-npu:8.0.RC1                                                 │
+│                                                                             │
+│  Layer 3: CI Runner Image (运行层)                                           │
+│  ─────────────────────────────────                                         │
+│  作用: 提供 CI Runner 运行环境                                                │
+│  内容:                                                                       │
+│    - GitHub Actions Runner                                                  │
+│    - 编译工具链: cmake, ninja, gcc                                           │
+│    - 缓存工具: ccache                                                        │
+│    - 测试工具: pytest, pytest-xdist                                         │
+│  更新频率: Runner 版本更新或工具链变更时                                       │
+│  镜像示例: runner-npu:cann8.0-runner2.311                                   │
+│                                                                             │
+│  Layer 4: Test Image (测试层)                                                │
+│  ─────────────────────────────────                                         │
+│  作用: 提供完整的测试运行环境                                                  │
+│  内容:                                                                       │
+│    - PyTorch nightly (特定版本)                                              │
+│    - torch-npu (对应版本)                                                    │
+│    - 测试依赖: numpy, expecttest, hypothesis                                │
+│  更新频率: 每日构建                                                           │
+│  镜像示例: test-npu:py2.7.0.dev20250330-cann8.0                              │
+│                                                                             │
+│  继承关系:                                                                   │
+│  Base → CANN → CI Runner → Test                                             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 2.2.2 分布式测试 (npu-distributed.yml)
+### 2.2 镜像构建策略
 
-```yaml
-# .github/workflows/npu-distributed.yml
+#### 2.2.1 构建触发机制
 
-name: npu-distributed
+| 触发源 | 触发条件 | 构建目标 | 说明 |
+|--------|---------|---------|------|
+| **CANN 发布** | 新版本发布 | CANN Image → Runner Image | 华为发布新版 CANN 时自动触发 |
+| **PyTorch nightly** | 每日更新 | Test Image | 每日 UTC 06:00 检查新版本 |
+| **torch-npu 更新** | master 分支提交 | Test Image | torch-npu 有新提交时触发 |
+| **手动触发** | workflow_dispatch | 所有层级 | 用于紧急修复或测试 |
 
-on:
-  schedule:
-    - cron: 0 4,16 * * *  # 每日两次
-  push:
-    tags:
-      - ciflow/npu-distributed/*
-  workflow_dispatch:
+#### 2.2.2 版本命名规范
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}-${{ github.event_name == 'workflow_dispatch' }}-${{ github.event_name == 'schedule' }}
-  cancel-in-progress: true
+```
+镜像命名格式: [registry]/[namespace]/[name]:[tag]
 
-permissions:
-  id-token: write
-  contents: read
-  actions: read
-
-jobs:
-  get-label-type:
-    if: github.repository_owner == 'pytorch'
-    name: get-label-type
-    uses: pytorch/pytorch/.github/workflows/_runner-determinator.yml@main
-    with:
-      triggering_actor: ${{ github.triggering_actor }}
-      issue_owner: ${{ github.event.pull_request.user.login || github.event.issue.user.login }}
-      curr_branch: ${{ github.head_ref || github.ref_name }}
-      curr_ref_type: ${{ github.ref_type }}
-
-  linux-noble-npu-cann8_1-py3_10-dist-build:
-    name: linux-noble-npu-cann8.1-py3.10-dist
-    uses: ./.github/workflows/_linux-build.yml
-    needs: get-label-type
-    with:
-      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
-      build-environment: linux-noble-npu-cann8.1-py3.10-910b-dist
-      docker-image-name: ci-image:pytorch-linux-noble-npu-cann8.1-py3.10-gcc13
-      test-matrix: |
-        { include: [
-          { config: "distributed", shard: 1, num_shards: 3, runner: "linux.npu.gpu.910b.4" },
-          { config: "distributed", shard: 2, num_shards: 3, runner: "linux.npu.gpu.910b.4" },
-          { config: "distributed", shard: 3, num_shards: 3, runner: "linux.npu.gpu.910b.4" },
-        ]}
-    secrets: inherit
-
-  linux-noble-npu-cann8_1-py3_10-dist-test:
-    name: linux-noble-npu-cann8.1-py3.10-dist
-    uses: ./.github/workflows/_npu-test.yml
-    needs: linux-noble-npu-cann8_1-py3_10-dist-build
-    with:
-      build-environment: ${{ needs.linux-noble-npu-cann8_1-py3_10-dist-build.outputs.build-environment }}
-      docker-image: ${{ needs.linux-noble-npu-cann8_1-py3_10-dist-build.outputs.docker-image }}
-      test-matrix: ${{ needs.linux-noble-npu-cann8_1-py3_10-dist-build.outputs.test-matrix }}
-    secrets: inherit
+Tag 组成规则:
+├── Base Image: ubuntu22.04-py311-[date]
+│   例: base-npu:ubuntu22.04-py311-20250301
+│
+├── CANN Image: [cann-version]-[npu-arch]
+│   例: cann-npu:8.0.RC1-910B
+│   例: cann-npu:8.1.beta-910A
+│
+├── Runner Image: [cann-version]-runner[runner-version]-[date]
+│   例: runner-npu:cann8.0.RC1-runner2.311-20250315
+│
+└── Test Image: py[pytorch-ver]-cann[cann-ver]-[date]
+│   例: test-npu:py2.7.0.dev20250330-cann8.0-20250330
+│   例: test-npu:py2.6.0-cann7.0-20250301
+│
+特殊 Tag:
+├── latest: 最新稳定版本
+├── nightly: 每日构建版本（不稳定）
+├── stable-[date]: 标记为稳定的版本
 ```
 
-#### 2.2.3 性能基准测试 (inductor-perf-test-nightly-npu.yml)
+#### 2.2.3 镜像存储策略
+
+| 存储位置 | 用途 | 优点 | 缺点 |
+|---------|------|------|------|
+| **华为云 SWR** | 主要生产镜像 | 国内访问快、NPU 生态集成 | 需要 IAM 配置 |
+| **Docker Hub** | 公开镜像分发 | 全球可访问、免费公开仓库 | 国内访问慢、限流 |
+| **GitHub Packages** | CI 内部镜像 | 与 GitHub Actions 集成 | 存储限制 |
+
+推荐策略：
+- **华为云 SWR** 作为主要生产镜像仓库
+- 使用 `swr.cn-east-3.myhuaweicloud.com/ascend-ci/` 前缀
+- 设置镜像保留策略：保留最近 30 天的每日镜像 + 所有稳定版本
+
+### 2.3 CANN 版本兼容矩阵
+
+CANN 是华为 NPU 软件栈的核心，其版本与 PyTorch、torch-npu 存在严格的兼容关系。
+
+#### 2.3.1 官方兼容矩阵（参考华为文档）
+
+| CANN 版本 | 支持的 NPU 架构 | Python 版本 | 发布日期 |
+|-----------|----------------|------------|---------|
+| **CANN 8.0.RC1** | 910A, 910B, 310P | 3.8-3.11 | 2024-12 |
+| **CANN 7.0.1** | 910A, 910B, 310P | 3.8-3.10 | 2024-06 |
+| **CANN 6.3.RC2** | 910A, 910B | 3.7-3.9 | 2023-12 |
+
+#### 2.3.2 PyTorch + CANN + torch-npu 兼容矩阵
+
+**关键兼容规则**：
+
+1. **PyTorch → torch-npu**: torch-npu 需适配 PyTorch API，跟随 nightly 更新
+2. **CANN → torch-npu**: torch-npu 底层算子依赖 CANN，版本必须匹配
+3. **CANN → NPU 架构**: 不同架构可能需要不同 CANN 版本
+
+| PyTorch 版本 | CANN 版本 | torch-npu 版本 | 验证状态 | 备注 |
+|-------------|-----------|---------------|---------|------|
+| **2.7.0.dev** | CANN 8.0.RC1 | v2.6.0+ | ✅ 稳定 | 当前推荐组合 |
+| **2.6.0** | CANN 7.0.1 | v2.5.0 | ✅ 稳定 | LTS 版本 |
+| **2.5.0** | CANN 6.3.RC2 | v2.4.0 | ⚠️ 维护中 | 仅安全更新 |
+| **2.4.0** | CANN 6.3.RC2 | v2.3.0 | ❌ 已废弃 | 不建议使用 |
+
+#### 2.3.3 兼容性验证策略
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     兼容性验证流程                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Step 1: 版本组合选择                                                        │
+│  ─────────────────────────────                                             │
+│  输入: PyTorch nightly commit + CANN 版本 + torch-npu commit                │
+│  输出: 选择待验证的版本组合                                                   │
+│                                                                             │
+│  Step 2: 静态兼容检查                                                        │
+│  ─────────────────────────────                                             │
+│  检查项:                                                                     │
+│    - CANN 版本号是否匹配 torch-npu 要求                                       │
+│    - Python 版本是否在支持范围                                                │
+│    - NPU 架构是否支持                                                         │
+│  结果: 通过 → 继续构建；失败 → 标记不兼容                                      │
+│                                                                             │
+│  Step 3: 构建验证                                                            │
+│  ─────────────────────────────                                             │
+│  流程:                                                                       │
+│    - 使用目标 CANN 镜像                                                       │
+│    - 安装 PyTorch nightly                                                    │
+│    - 构建 torch-npu wheel                                                   │
+│    - 检查编译错误                                                             │
+│  结果: 成功 → 继续；失败 → 创建兼容性 issue                                   │
+│                                                                             │
+│  Step 4: 运行时验证                                                          │
+│  ─────────────────────────────                                             │
+│  流程:                                                                       │
+│    - 导入 torch_npu                                                          │
+│    - NPU 设备初始化                                                          │
+│    - 简单算子执行                                                            │
+│  结果: 成功 → 更新兼容矩阵；失败 → 标记问题                                   │
+│                                                                             │
+│  Step 5: 更新兼容矩阵                                                        │
+│  ─────────────────────────────                                             │
+│  动作:                                                                       │
+│    - 记录验证结果到 compatibility_matrix.json                                │
+│    - 更新镜像 tag 标记                                                        │
+│    - 发送通知（成功/失败）                                                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 2.3.4 兼容性矩阵数据结构
+
+```json
+// compatibility_matrix.json
+{
+  "version_matrix": [
+    {
+      "pytorch_version": "2.7.0.dev20250330",
+      "pytorch_commit": "abc123def",
+      "cann_version": "8.0.RC1",
+      "torch_npu_version": "v2.6.0.20250330",
+      "torch_npu_commit": "def456abc",
+      "status": "verified",
+      "verified_date": "2025-03-30",
+      "test_results": {
+        "smoke": "passed",
+        "device_agnostic": "passed",
+        "npu_specific": "passed"
+      }
+    }
+  ],
+  "metadata": {
+    "last_updated": "2025-03-30T05:00:00Z",
+    "source": "nightly-verification"
+  }
+}
+```
+
+### 2.4 镜像 Dockerfile 设计
+
+#### 2.4.1 Base Image Dockerfile
+
+```dockerfile
+# dockerfiles/base-npu/Dockerfile
+# Base Image: Ubuntu 22.04 + Python 3.11
+
+FROM ubuntu:22.04
+
+LABEL maintainer="CI Team"
+LABEL description="Base image for NPU CI - Ubuntu 22.04 + Python 3.11"
+
+# 设置环境变量
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# 安装基础工具
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    wget \
+    ca-certificates \
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 3.11（从 deadsnakes PPA）
+RUN apt-get update && apt-get install -y software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get install -y python3.11 python3.11-dev python3.11-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# 设置 Python 3.11 为默认
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python
+
+# 安装 pip
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+
+# 安装 ccache
+RUN apt-get update && apt-get install -y ccache \
+    && rm -rf /var/lib/apt/lists/*
+
+# 配置 ccache
+ENV CCACHE_DIR=/cache/ccache
+ENV CCACHE_MAXSIZE=5G
+
+# 创建工作目录
+WORKDIR /workspace
+
+# 创建缓存目录
+RUN mkdir -p /cache/ccache /cache/pip
+
+# 版本信息
+RUN python --version && pip --version
+```
+
+#### 2.4.2 CANN Image Dockerfile
+
+```dockerfile
+# dockerfiles/cann-npu/Dockerfile
+# CANN Image: 基于 Base Image，添加 CANN 软件栈
+
+ARG BASE_IMAGE=base-npu:ubuntu22.04-py311-20250301
+FROM ${BASE_IMAGE}
+
+ARG CANN_VERSION=8.0.RC1
+ARG NPU_ARCH=910B
+
+LABEL maintainer="CI Team"
+LABEL description="CANN image for NPU CI"
+LABEL cann_version="${CANN_VERSION}"
+LABEL npu_arch="${NPU_ARCH}"
+
+# 设置环境变量
+ENV CANN_VERSION=${CANN_VERSION}
+ENV NPU_ARCH=${NPU_ARCH}
+ENV ASCEND_HOME=/usr/local/Ascend
+ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit
+
+# 安装 CANN Toolkit（从华为镜像源）
+# 注意：实际安装需要 CANN 安装包，此处为示例
+RUN mkdir -p ${ASCEND_HOME} \
+    && cd /tmp \
+    && wget -q https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/${CANN_VERSION}/Ascend-cann-toolkit_${CANN_VERSION}_linux-x86_64.run \
+    && chmod +x Ascend-cann-toolkit*.run \
+    && ./Ascend-cann-toolkit*.run --install --install-path=${ASCEND_HOME} \
+    && rm -f Ascend-cann-toolkit*.run
+
+# 安装 HCCL（分布式通信库）
+RUN cd /tmp \
+    && wget -q https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/${CANN_VERSION}/Ascend-cann-hccl_${CANN_VERSION}_linux-x86_64.run \
+    && chmod +x Ascend-cann-hccl*.run \
+    && ./Ascend-cann-hccl*.run --install --install-path=${ASCEND_HOME} \
+    && rm -f Ascend-cann-hccl*.run
+
+# 设置 CANN 环境变量
+RUN echo "source ${ASCEND_HOME}/bin/setenv.bash" >> /etc/bash.bashrc
+
+ENV PATH="${ASCEND_TOOLKIT_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${ASCEND_TOOLKIT_HOME}/lib64:${LD_LIBRARY_PATH}"
+ENV PYTHONPATH="${ASCEND_TOOLKIT_HOME}/python/site-packages:${PYTHONPATH}"
+
+# 验证 CANN 安装
+RUN python -c "import te; print(f'CANN version: {te.__version__}')" || echo "CANN installed"
+
+WORKDIR /workspace
+```
+
+#### 2.4.3 CI Runner Image Dockerfile
+
+```dockerfile
+# dockerfiles/runner-npu/Dockerfile
+# CI Runner Image: 基于 CANN Image，添加 GitHub Actions Runner
+
+ARG CANN_IMAGE=cann-npu:8.0.RC1-910B
+FROM ${CANN_IMAGE}
+
+ARG RUNNER_VERSION=2.311.0
+
+LABEL maintainer="CI Team"
+LABEL description="GitHub Actions Runner with NPU support"
+LABEL runner_version="${RUNNER_VERSION}"
+
+# 安装 Runner 依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    jq \
+    libicu70 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建 Runner 用户
+RUN useradd -m -s /bin/bash runner \
+    && mkdir -p /home/runner/work \
+    && chown -R runner:runner /home/runner
+
+# 下载并安装 GitHub Actions Runner
+WORKDIR /home/runner
+RUN curl -o actions-runner.tar.gz -L \
+    https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
+    && tar xzf actions-runner.tar.gz \
+    && rm actions-runner.tar.gz \
+    && ./bin/installdependencies.sh \
+    && chown -R runner:runner /home/runner
+
+# 安装测试工具
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-xdist \
+    pytest-html \
+    expecttest \
+    hypothesis
+
+# 配置缓存
+ENV CCACHE_DIR=/cache/ccache
+ENV PIP_CACHE_DIR=/cache/pip
+
+# Runner 工作目录
+WORKDIR /home/runner/work
+
+# 切换到 runner 用户
+USER runner
+
+# Entrypoint（用于 Runner 注册和启动）
+COPY entrypoint.sh /home/runner/entrypoint.sh
+ENTRYPOINT ["/home/runner/entrypoint.sh"]
+```
+
+#### 2.4.4 Test Image Dockerfile
+
+```dockerfile
+# dockerfiles/test-npu/Dockerfile
+# Test Image: 基于 Runner Image，添加 PyTorch 和 torch-npu
+
+ARG RUNNER_IMAGE=runner-npu:cann8.0-runner2.311-20250315
+FROM ${RUNNER_IMAGE}
+
+ARG PYTORCH_VERSION=2.7.0.dev20250330
+ARG TORCH_NPU_REPO=https://gitcode.com/Ascend/pytorch.git
+ARG TORCH_NPU_BRANCH=master
+
+LABEL maintainer="CI Team"
+LABEL description="Test image with PyTorch nightly + torch-npu"
+LABEL pytorch_version="${PYTORCH_VERSION}"
+
+# 切换回 root 安装
+USER root
+
+# 安装 PyTorch nightly
+RUN pip install --no-cache-dir --pre torch==${PYTORCH_VERSION} \
+    --index-url https://download.pytorch.org/whl/nightly/cpu
+
+# 克隆并构建 torch-npu
+RUN cd /tmp \
+    && git clone --depth=1 --branch=${TORCH_NPU_BRANCH} ${TORCH_NPU_REPO} torch-npu \
+    && cd torch-npu \
+    && python setup.py bdist_wheel \
+    && pip install --no-cache-dir dist/torch_npu*.whl \
+    && rm -rf /tmp/torch-npu
+
+# 安装 PyTorch 测试依赖
+RUN pip install --no-cache-dir \
+    numpy \
+    pyyaml \
+    scipy \
+    networkx \
+    sympy
+
+# 验证安装
+RUN python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+
+# 切换回 runner 用户
+USER runner
+
+WORKDIR /home/runner/work
+```
+
+### 2.5 镜像仓库管理
+
+#### 2.5.1 华为云 SWR 配置
 
 ```yaml
-# .github/workflows/inductor-perf-test-nightly-npu.yml
+# 镜像仓库配置
+registry:
+  primary:
+    name: "华为云 SWR"
+    url: "swr.cn-east-3.myhuaweicloud.com"
+    namespace: "ascend-ci"
+    auth:
+      type: "iam"
+      region: "cn-east-3"
+      # IAM 用户需要 SWR 推送权限
 
-name: inductor-perf-nightly-npu
+  backup:
+    name: "Docker Hub"
+    url: "docker.io"
+    namespace: "ascendpytorch"
+    auth:
+      type: "username_password"
+```
+
+#### 2.5.2 镜像清理策略
+
+```yaml
+# 镜像清理策略
+cleanup_policy:
+  # 保留策略
+  retention:
+    base_image:
+      keep_all: true  # Base Image 全部保留
+    cann_image:
+      keep_versions: ["8.0.RC1", "7.0.1", "6.3.RC2"]  # 保留支持的 CANN 版本
+    runner_image:
+      keep_days: 90   # 保留最近 90 天
+      keep_latest: 3  # 每个 CANN 版本保留最近 3 个
+    test_image:
+      keep_days: 30   # 每日镜像保留 30 天
+      keep_stable: true  # 稳定版本全部保留
+
+  # 清理执行
+  schedule:
+    cron: "0 3 * * *"  # 每日凌晨 3 点执行清理
+    dry_run: false
+```
+
+---
+
+## 三、镜像构建 Workflow
+
+### 3.1 构建 Workflow 架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    镜像构建 Workflow 架构                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ build-base-image.yml                                                   │ │
+│  │                                                                         │ │
+│  │   触发: 手动触发 / 定时(每6月)                                           │ │
+│  │   输出: base-npu:ubuntu22.04-py311-[date]                              │ │
+│  │   用途: 构建基础镜像                                                     │ │
+│  │                                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ build-cann-image.yml                                                   │ │
+│  │                                                                         │ │
+│  │   触发: CANN 版本发布 / 手动触发                                         │ │
+│  │   输入: CANN_VERSION, NPU_ARCH                                          │ │
+│  │   输出: cann-npu:[version]-[arch]                                       │ │
+│  │   用途: 构建 CANN 镜像                                                   │ │
+│  │                                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ build-runner-image.yml                                                 │ │
+│  │                                                                         │ │
+│  │   触发: CANN 镜像更新 / Runner 版本更新 / 手动触发                        │ │
+│  │   输入: CANN_IMAGE, RUNNER_VERSION                                      │ │
+│  │   输出: runner-npu:cann[ver]-runner[ver]-[date]                         │ │
+│  │   用途: 构建 CI Runner 镜像                                              │ │
+│  │                                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ build-test-image.yml                                                   │ │
+│  │                                                                         │ │
+│  │   触发: 每日定时 / PyTorch nightly 更新 / torch-npu 更新                 │ │
+│  │   输入: PYTORCH_VERSION, CANN_VERSION, TORCH_NPU_COMMIT                 │ │
+│  │   输出: test-npu:py[ver]-cann[ver]-[date]                               │ │
+│  │   用途: 构建测试镜像                                                     │ │
+│  │                                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ verify-compatibility.yml                                               │ │
+│  │                                                                         │ │
+│  │   触发: 测试镜像构建完成后                                                │ │
+│  │   输入: Test Image                                                      │ │
+│  │   输出: 兼容性验证结果 + 更新兼容矩阵                                     │ │
+│  │   用途: 验证版本组合兼容性                                                │ │
+│  │                                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 Base Image 构建 Workflow
+
+```yaml
+# .github/workflows/build-base-image.yml
+
+name: build-base-image
 
 on:
-  schedule:
-    - cron: 15 0 * * *  # 每日
   workflow_dispatch:
     inputs:
-      training:
-        description: Run training?
-        type: boolean
-        default: true
-      inference:
-        description: Run inference?
-        type: boolean
-        default: true
-      cudagraphs:
-        description: Run with cudagraphs?
-        type: boolean
-        default: true
-      benchmark_configs:
-        description: Benchmark configs
-        type: string
-        default: inductor_huggingface_perf_npu,inductor_timm_perf_npu,inductor_torchbench_perf_npu
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}-${{ github.event_name == 'workflow_dispatch' }}-${{ github.event_name == 'schedule' }}
-  cancel-in-progress: true
-
-permissions: read-all
-
-jobs:
-  get-label-type:
-    name: get-label-type
-    uses: pytorch/pytorch/.github/workflows/_runner-determinator.yml@main
-    with:
-      triggering_actor: ${{ github.triggering_actor }}
-      issue_owner: ${{ github.event.pull_request.user.login || github.event.issue.user.login }}
-      curr_branch: ${{ github.head_ref || github.ref_name }}
-      curr_ref_type: ${{ github.ref_type }}
-
-  linux-noble-npu-cann8_1-py3_10-benchmark-build:
-    name: linux-noble-npu-cann8.1-py3.10-benchmark
-    uses: ./.github/workflows/_linux-build.yml
-    needs: get-label-type
-    with:
-      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
-      build-environment: linux-noble-npu-cann8.1-py3.10-910b-benchmarks
-      docker-image-name: ci-image:pytorch-linux-noble-npu-cann8.1-py3.10-gcc13-benchmarks
-      test-matrix: |
-        { include: [
-          { config: "inductor_huggingface_perf_npu", shard: 1, num_shards: 5, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_huggingface_perf_npu", shard: 2, num_shards: 5, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_huggingface_perf_npu", shard: 3, num_shards: 5, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_huggingface_perf_npu", shard: 4, num_shards: 5, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_huggingface_perf_npu", shard: 5, num_shards: 5, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_timm_perf_npu", shard: 1, num_shards: 7, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_timm_perf_npu", shard: 2, num_shards: 7, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_timm_perf_npu", shard: 3, num_shards: 7, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_timm_perf_npu", shard: 4, num_shards: 7, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_timm_perf_npu", shard: 5, num_shards: 7, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_timm_perf_npu", shard: 6, num_shards: 7, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_timm_perf_npu", shard: 7, num_shards: 7, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_torchbench_perf_npu", shard: 1, num_shards: 9, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_torchbench_perf_npu", shard: 2, num_shards: 9, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_torchbench_perf_npu", shard: 3, num_shards: 9, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_torchbench_perf_npu", shard: 4, num_shards: 9, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_torchbench_perf_npu", shard: 5, num_shards: 9, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_torchbench_perf_npu", shard: 6, num_shards: 9, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_torchbench_perf_npu", shard: 7, num_shards: 9, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_torchbench_perf_npu", shard: 8, num_shards: 9, runner: "linux.npu.gpu.910b.1" },
-          { config: "inductor_torchbench_perf_npu", shard: 9, num_shards: 9, runner: "linux.npu.gpu.910b.1" },
-        ]}
-    secrets: inherit
-
-  linux-noble-npu-cann8_1-py3_10-benchmark-test:
-    permissions:
-      id-token: write
-      contents: read
-    name: linux-noble-npu-cann8.1-py3.10-benchmark
-    uses: ./.github/workflows/_npu-test.yml
-    needs: linux-noble-npu-cann8_1-py3_10-benchmark-build
-    with:
-      build-environment: ${{ needs.linux-noble-npu-cann8_1-py3_10-benchmark-build.outputs.build-environment }}
-      docker-image: ${{ needs.linux-noble-npu-cann8_1-py3_10-benchmark-build.outputs.docker-image }}
-      test-matrix: ${{ needs.linux-noble-npu-cann8_1-py3_10-benchmark-build.outputs.test-matrix }}
-      timeout-minutes: 720
-      disable-monitor: true
-    secrets: inherit
-```
-
-### 2.3 测试Workflow (_npu-test.yml)
-
-```yaml
-# .github/workflows/_npu-test.yml
-# 参考: _rocm-test.yml, _xpu-test.yml
-
-name: npu-test
-
-on:
-  workflow_call:
-    inputs:
-      build-environment:
+      ubuntu_version:
+        description: 'Ubuntu version'
         required: true
-        type: string
-      test-matrix:
+        default: '22.04'
+      python_version:
+        description: 'Python version'
         required: true
-        type: string
-      docker-image:
-        required: true
-        type: string
-      timeout-minutes:
-        required: false
-        type: number
-        default: 300
-      disable-monitor:
-        required: false
-        type: boolean
-        default: true
-    secrets:
-      HUGGING_FACE_HUB_TOKEN:
-        required: false
+        default: '3.11'
+  schedule:
+    # 每 6 个月检查更新
+    - cron: '0 0 1 */6 *'
 
 env:
-  GIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-
-permissions:
-  id-token: write
-  contents: read
+  REGISTRY: swr.cn-east-3.myhuaweicloud.com
+  IMAGE_NAME: ascend-ci/base-npu
 
 jobs:
-  test:
-    if: github.repository_owner == 'pytorch' && toJSON(fromJSON(inputs.test-matrix).include) != '[]'
-    strategy:
-      matrix: ${{ fromJSON(inputs.test-matrix) }}
-      fail-fast: false
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.timeout-minutes }}
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+
     steps:
-      - name: Checkout PyTorch
-        uses: pytorch/pytorch/.github/actions/checkout-pytorch@main
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Setup NPU
-        uses: ./.github/actions/setup-npu
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Runner check NPU count (distributed jobs)
-        if: ${{ contains(matrix.config, 'distributed') }}
-        shell: bash
+      - name: Login to SWR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.SWR_USERNAME }}
+          password: ${{ secrets.SWR_PASSWORD }}
+
+      - name: Generate image metadata
+        id: meta
         run: |
-          nnpu=$(npu-smi info | grep -c "Ascend")
-          if [[ $nnpu -lt 2 ]]; then
-            echo "Error: only $nnpu NPU(s) detected, at least 2 NPUs are needed for distributed jobs"
+          DATE=$(date -u +"%Y%m%d")
+          TAG="ubuntu${{ inputs.ubuntu_version }}-py${{ inputs.python_version }}-${DATE}"
+          echo "tags=${TAG}" >> $GITHUB_OUTPUT
+          echo "### Image Tag" >> $GITHUB_STEP_SUMMARY
+          echo "${TAG}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build and push Base Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./dockerfiles/base-npu
+          file: ./dockerfiles/base-npu/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tags }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-to: type=inline
+          build-args: |
+            UBUNTU_VERSION=${{ inputs.ubuntu_version }}
+            PYTHON_VERSION=${{ inputs.python_version }}
+
+      - name: Verify image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tags }}
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tags }} \
+            python --version
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tags }} \
+            pip --version
+
+      - name: Update image manifest
+        run: |
+          echo '{"base_image":{"tag":"${{ steps.meta.outputs.tags }}","date":"$(date -u)","ubuntu":"${{ inputs.ubuntu_version }}","python":"${{ inputs.python_version }}"}}' \
+            >> image_manifest.json
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-image-manifest
+          path: image_manifest.json
+```
+
+### 3.3 CANN Image 构建 Workflow
+
+```yaml
+# .github/workflows/build-cann-image.yml
+
+name: build-cann-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      cann_version:
+        description: 'CANN version (e.g., 8.0.RC1)'
+        required: true
+        default: '8.0.RC1'
+      npu_arch:
+        description: 'NPU architecture (910A, 910B, 310P)'
+        required: true
+        default: '910B'
+      base_image:
+        description: 'Base image tag'
+        required: true
+        default: 'ubuntu22.04-py311-20250301'
+  repository_dispatch:
+    types: [cann-release]
+
+env:
+  REGISTRY: swr.cn-east-3.myhuaweicloud.com
+  IMAGE_NAME: ascend-ci/cann-npu
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to SWR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.SWR_USERNAME }}
+          password: ${{ secrets.SWR_PASSWORD }}
+
+      - name: Validate CANN version
+        id: validate
+        run: |
+          # 检查 CANN 版本格式
+          VERSION="${{ inputs.cann_version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.(RC[0-9]+|[0-9]+)$ ]]; then
+            echo "::error::Invalid CANN version format: $VERSION"
             exit 1
           fi
+          echo "valid=true" >> $GITHUB_OUTPUT
 
-      - name: Calculate docker image
-        id: calculate-docker-image
-        uses: pytorch/test-infra/.github/actions/calculate-docker-image@main
-        with:
-          docker-image-name: ${{ inputs.docker-image }}
-
-      - name: Pull docker image
-        uses: pytorch/test-infra/.github/actions/pull-docker-image@main
-        with:
-          docker-image: ${{ steps.calculate-docker-image.outputs.docker-image }}
-
-      - name: Download build artifacts
-        uses: ./.github/actions/download-build-artifacts
-        with:
-          name: ${{ inputs.build-environment }}
-
-      - name: Parse ref
-        id: parse-ref
-        run: .github/scripts/parse_ref.py
-
-      - name: Test
-        id: test
-        env:
-          BUILD_ENVIRONMENT: ${{ inputs.build-environment }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          TEST_CONFIG: ${{ matrix.config }}
-          SHARD_NUMBER: ${{ matrix.shard }}
-          NUM_TEST_SHARDS: ${{ matrix.num_shards }}
-          DOCKER_IMAGE: ${{ inputs.docker-image }}
-          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
+      - name: Download CANN packages
         run: |
-          set -x
+          mkdir -p ./dockerfiles/cann-npu/packages
+          CANN_VER="${{ inputs.cann_version }}"
 
-          if [[ $TEST_CONFIG == 'multigpu' ]]; then
-            TEST_COMMAND=.ci/pytorch/multigpu-test.sh
-          else
-            TEST_COMMAND=.ci/pytorch/test.sh
-          fi
+          # 下载 CANN Toolkit
+          wget -q \
+            "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/${CANN_VER}/Ascend-cann-toolkit_${CANN_VER}_linux-x86_64.run" \
+            -O ./dockerfiles/cann-npu/packages/Ascend-cann-toolkit.run
 
-          # 启动Docker容器
-          container_name=$(docker run \
-            -e BUILD_ENVIRONMENT \
-            -e PR_NUMBER \
-            -e GITHUB_ACTIONS \
-            -e SHARD_NUMBER \
-            -e TEST_CONFIG \
-            -e NUM_TEST_SHARDS \
-            -e HUGGING_FACE_HUB_TOKEN \
-            --ulimit stack=10485760:83886080 \
-            --ulimit core=0 \
-            --security-opt seccomp=unconfined \
-            --cap-add=SYS_PTRACE \
-            --shm-size="8g" \
-            --tty \
-            --detach \
-            --name="${container_name}" \
-            --user jenkins \
-            --privileged \
-            --device=/dev/davinci0 \
-            --device=/dev/davinci_manager \
-            --device=/dev/devmm_svm \
-            --device=/dev/hisi_hdc \
-            -v "${GITHUB_WORKSPACE}:/var/lib/jenkins/workspace" \
-            -w /var/lib/jenkins/workspace \
-            "${DOCKER_IMAGE}"
-          )
+          # 下载 HCCL
+          wget -q \
+            "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/${CANN_VER}/Ascend-cann-hccl_${CANN_VER}_linux-x86_64.run" \
+            -O ./dockerfiles/cann-npu/packages/Ascend-cann-hccl.run
 
-          echo "CONTAINER_NAME=${container_name}" >> "$GITHUB_ENV"
+          # 验证下载
+          ls -la ./dockerfiles/cann-npu/packages/
 
-          # 执行测试
-          docker exec -t "${container_name}" sh -c "cd .. && cp -R workspace pytorch && cd pytorch && pip install dist/*.whl && ${TEST_COMMAND}"
-
-      - name: Save test results
-        if: always()
+      - name: Generate image tag
+        id: meta
         run: |
-          docker exec -t "${{ env.CONTAINER_NAME }}" sh -c "cd ../pytorch && sudo cp -R test/test-reports ../workspace/test"
+          TAG="${{ inputs.cann_version }}-${{ inputs.npu_arch }}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "### Image Tag: ${TAG}" >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload test artifacts
-        uses: ./.github/actions/upload-test-artifacts
-        if: always()
+      - name: Build and push CANN Image
+        uses: docker/build-push-action@v5
         with:
-          use-gha: true
-          file-suffix: ${{ github.job }}-${{ matrix.config }}-${{ matrix.shard }}-${{ matrix.num_shards }}
+          context: ./dockerfiles/cann-npu
+          file: ./dockerfiles/cann-npu/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cann${{ inputs.cann_version }}
+          build-args: |
+            BASE_IMAGE=ascend-ci/base-npu:${{ inputs.base_image }}
+            CANN_VERSION=${{ inputs.cann_version }}
+            NPU_ARCH=${{ inputs.npu_arch }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cann${{ inputs.cann_version }}
 
-      - name: Teardown NPU
-        if: always()
-        uses: ./.github/actions/teardown-npu
+      - name: Verify CANN installation
+        run: |
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} \
+            python -c "import te; print(f'CANN version: {te.__version__}')" || \
+            echo "CANN package installed (runtime verification requires NPU hardware)"
+
+      - name: Trigger runner image build
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.WORKFLOW_TOKEN }}
+          script: |
+            github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event_type: 'cann-image-built',
+              client_payload: {
+                cann_image: '${{ steps.meta.outputs.tag }}',
+                cann_version: '${{ inputs.cann_version }}',
+                npu_arch: '${{ inputs.npu_arch }}'
+              }
+            });
+
+      - name: Update compatibility matrix
+        run: |
+          cat > cann_version.json << EOF
+          {
+            "cann_version": "${{ inputs.cann_version }}",
+            "npu_arch": "${{ inputs.npu_arch }}",
+            "image_tag": "${{ steps.meta.outputs.tag }}",
+            "build_date": "$(date -u)",
+            "status": "available"
+          }
+          EOF
+
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: cann-version-info
+          path: cann_version.json
 ```
 
-### 2.4 Setup NPU Action
+### 3.4 Runner Image 构建 Workflow
 
 ```yaml
-# .github/actions/setup-npu/action.yml
+# .github/workflows/build-runner-image.yml
 
-name: 'Setup NPU'
-description: 'Setup NPU environment for CI'
+name: build-runner-image
 
-runs:
-  using: 'composite'
-  steps:
-    - name: Setup NPU environment
-      shell: bash
-      run: |
-        # 检查NPU设备
-        echo "Checking NPU devices..."
-        npu-smi info
+on:
+  workflow_dispatch:
+    inputs:
+      cann_image:
+        description: 'CANN image tag (e.g., 8.0.RC1-910B)'
+        required: true
+      runner_version:
+        description: 'GitHub Actions Runner version'
+        required: true
+        default: '2.311.0'
+  repository_dispatch:
+    types: [cann-image-built]
+  schedule:
+    # Runner 版本更新检查（每周）
+    - cron: '0 6 * * 1'
 
-        # 设置环境变量
-        if [ -f /usr/local/Ascend/bin/setenv.bash ]; then
-          source /usr/local/Ascend/bin/setenv.bash
-        fi
-
-        # 检查CANN版本
-        echo "CANN version:"
-        cat /usr/local/Ascend/version.info 2>/dev/null || echo "Version info not found"
-
-        # 设置Docker权限
-        sudo chmod 666 /dev/davinci* 2>/dev/null || true
-        sudo chmod 666 /dev/davinci_manager 2>/dev/null || true
-        sudo chmod 666 /dev/devmm_svm 2>/dev/null || true
-        sudo chmod 666 /dev/hisi_hdc 2>/dev/null || true
-```
-
-### 2.5 test.sh NPU处理
-
-```bash
-# .ci/pytorch/test.sh 中新增NPU处理
-
-# NPU相关环境变量设置
-if [[ "$BUILD_ENVIRONMENT" == *npu* ]]; then
-  # 激活NPU环境
-  if [ -f /usr/local/Ascend/bin/setenv.bash ]; then
-    source /usr/local/Ascend/bin/setenv.bash
-  fi
-
-  # 设置测试设备
-  export PYTORCH_TESTING_DEVICE_ONLY_FOR="npu"
-  export PYTHON_TEST_EXTRA_OPTION="--npu"
-
-  # 检查NPU状态
-  echo "Checking NPU status..."
-  npu-smi info
-
-  # 设置NPU架构
-  if [ -n "$NPU_ARCH" ]; then
-    echo "NPU_ARCH: $NPU_ARCH"
-  fi
-fi
-
-# 测试函数
-test_python_smoke_npu() {
-  # NPU Smoke测试
-  pytest test/npu \
-    -k 'npu' \
-    --npu \
-    --ignore-glob='*_distributed_*' \
-    ...
-}
-
-test_npu_bin() {
-  # NPU二进制测试
-  for npu_case in "${BUILD_BIN_DIR}"/*npu*; do
-    if [[ "$npu_case" != *"*"* && "$npu_case" != *.so && "$npu_case" != *.a ]]; then
-      case_name=$(basename "$npu_case")
-      "$npu_case" --gtest_output=xml:"$TEST_REPORTS_DIR"/"$case_name".xml
-    fi
-  done
-}
-```
-
----
-
-## 三、Runner 规划
-
-### 3.1 Runner命名规范
-
-```
-linux.npu.gpu.<arch>.<count>
-
-示例:
-- linux.npu.gpu.910a.1    # 单卡910A
-- linux.npu.gpu.910b.1    # 单卡910B
-- linux.npu.gpu.910b.2    # 双卡910B
-- linux.npu.gpu.910b.4    # 4卡910B
-- linux.npu.gpu.910b.8    # 8卡910B
-- linux.npu.gpu.310p.1    # 单卡310P
-```
-
-### 3.2 Runner资源配置
-
-| Runner类型 | NPU数量 | CPU | 内存 | 用途 |
-|-----------|--------|-----|------|------|
-| `linux.npu.gpu.910b.1` | 1 | 32核 | 64GB | 默认测试 |
-| `linux.npu.gpu.910b.2` | 2 | 64核 | 128GB | 分布式测试 |
-| `linux.npu.gpu.910b.4` | 4 | 128核 | 256GB | 分布式测试 |
-| `linux.npu.gpu.910b.8` | 8 | 256核 | 512GB | 大规模分布式 |
-
----
-
-## 四、docker-builds.yml 更新
-
-```yaml
-# .github/workflows/docker-builds.yml 更新
+env:
+  REGISTRY: swr.cn-east-3.myhuaweicloud.com
+  IMAGE_NAME: ascend-ci/runner-npu
 
 jobs:
-  docker-build:
-    strategy:
-      matrix:
-        docker-image-name: [
-          # ... 现有镜像 ...
-          pytorch-linux-jammy-npu-cann8.0-py3.10-gcc11,
-          pytorch-linux-noble-npu-cann8.1-py3.10-gcc13,
-          pytorch-linux-noble-npu-cann8.1-py3.12-gcc13,
-          pytorch-linux-noble-npu-cann8.1-py3.10-gcc13-benchmarks,
-          pytorch-linux-noble-npu-cann-nightly-py3.10-gcc13,
-        ]
+  check-runner-version:
+    runs-on: ubuntu-latest
+    outputs:
+      latest_runner: ${{ steps.check.outputs.version }}
+
+    steps:
+      - name: Check latest Runner version
+        id: check
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | sed 's/v//')
+          echo "version=${LATEST}" >> $GITHUB_OUTPUT
+          echo "Latest Runner version: ${LATEST}"
+
+  build:
+    needs: check-runner-version
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine inputs
+        id: inputs
+        run: |
+          # 处理触发来源
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            CANN_IMAGE="${{ github.event.client_payload.cann_image }}"
+            CANN_VER="${{ github.event.client_payload.cann_version }}"
+          else
+            CANN_IMAGE="${{ inputs.cann_image }}"
+            CANN_VER=$(echo "${{ inputs.cann_image }}" | cut -d'-' -f1)
+          fi
+
+          RUNNER_VER="${{ inputs.runner_version || needs.check-runner-version.outputs.latest_runner }}"
+
+          echo "cann_image=${CANN_IMAGE}" >> $GITHUB_OUTPUT
+          echo "cann_version=${CANN_VER}" >> $GITHUB_OUTPUT
+          echo "runner_version=${RUNNER_VER}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to SWR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.SWR_USERNAME }}
+          password: ${{ secrets.SWR_PASSWORD }}
+
+      - name: Generate image tag
+        id: meta
+        run: |
+          DATE=$(date -u +"%Y%m%d")
+          CANN_VER="${{ steps.inputs.outputs.cann_version }}"
+          RUNNER_VER="${{ steps.inputs.outputs.runner_version }}"
+          TAG="cann${CANN_VER}-runner${RUNNER_VER}-${DATE}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "### Image Tag: ${TAG}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build and push Runner Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./dockerfiles/runner-npu
+          file: ./dockerfiles/runner-npu/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cann${{ steps.inputs.outputs.cann_version }}-latest
+          build-args: |
+            CANN_IMAGE=ascend-ci/cann-npu:${{ steps.inputs.outputs.cann_image }}
+            RUNNER_VERSION=${{ steps.inputs.outputs.runner_version }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cann${{ steps.inputs.outputs.cann_version }}-latest
+
+      - name: Prepare Runner entrypoint script
+        run: |
+          cat > ./dockerfiles/runner-npu/entrypoint.sh << 'EOF'
+          #!/bin/bash
+          set -e
+
+          # 设置 NPU 设备权限
+          if [[ -e /dev/davinci0 ]]; then
+            sudo chmod 666 /dev/davinci* 2>/dev/null || true
+            sudo chmod 666 /dev/davinci_manager 2>/dev/null || true
+          fi
+
+          # 设置 CANN 环境
+          source /usr/local/Ascend/bin/setenv.bash 2>/dev/null || true
+
+          # Runner 注册逻辑
+          if [[ -n "$RUNNER_TOKEN" ]]; then
+            ./config.sh --url "$RUNNER_REPO" --token "$RUNNER_TOKEN" --labels "$RUNNER_LABELS"
+          fi
+
+          # 启动 Runner
+          ./run.sh
+          EOF
+          chmod +x ./dockerfiles/runner-npu/entrypoint.sh
+
+      - name: Update runner manifest
+        run: |
+          cat > runner_manifest.json << EOF
+          {
+            "cann_version": "${{ steps.inputs.outputs.cann_version }}",
+            "runner_version": "${{ steps.inputs.outputs.runner_version }}",
+            "image_tag": "${{ steps.meta.outputs.tag }}",
+            "build_date": "$(date -u)",
+            "capabilities": ["npu", "build", "test"]
+          }
+          EOF
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-image-manifest
+          path: runner_manifest.json
+```
+
+### 3.5 Test Image 构建 Workflow
+
+```yaml
+# .github/workflows/build-test-image.yml
+
+name: build-test-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      pytorch_version:
+        description: 'PyTorch nightly version (e.g., 2.7.0.dev20250330)'
+        required: true
+      cann_version:
+        description: 'CANN version'
+        required: true
+        default: '8.0.RC1'
+      torch_npu_commit:
+        description: 'torch-npu commit SHA (optional, use latest if empty)'
+        required: false
+  schedule:
+    # 每日构建（UTC 06:00 = 北京时间 14:00）
+    - cron: '0 6 * * *'
+  repository_dispatch:
+    types: [torch-npu-update]
+
+env:
+  REGISTRY: swr.cn-east-3.myhuaweicloud.com
+  IMAGE_NAME: ascend-ci/test-npu
+
+jobs:
+  get-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      pytorch_version: ${{ steps.pytorch.outputs.version }}
+      pytorch_commit: ${{ steps.pytorch.outputs.commit }}
+      torch_npu_commit: ${{ steps.torch_npu.outputs.commit }}
+      cann_version: ${{ steps.cann.outputs.version }}
+
+    steps:
+      - name: Get PyTorch nightly version
+        id: pytorch
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            PY_VER="${{ inputs.pytorch_version }}"
+          else
+            # 获取最新 nightly 版本
+            PY_VER=$(pip index versions torch --pre --index-url https://download.pytorch.org/whl/nightly/cpu 2>/dev/null \
+              | grep -oP '2\.\d+\.\d+\.dev\d+' | head -1)
+          fi
+
+          # 获取对应的 commit
+          PY_COMMIT=$(curl -s "https://download.pytorch.org/whl/nightly/cpu/torch-${PY_VER}.whl" 2>/dev/null \
+            | strings | grep -oP '[a-f0-9]{12}' | head -1 || echo "unknown")
+
+          echo "version=${PY_VER}" >> $GITHUB_OUTPUT
+          echo "commit=${PY_COMMIT}" >> $GITHUB_OUTPUT
+          echo "PyTorch: ${PY_VER}"
+
+      - name: Get torch-npu latest commit
+        id: torch_npu
+        run: |
+          if [[ "${{ inputs.torch_npu_commit }}" != "" ]]; then
+            NPU_COMMIT="${{ inputs.torch_npu_commit }}"
+          else
+            NPU_COMMIT=$(curl -s "https://gitcode.com/api/v5/repos/Ascend/pytorch/commits/master" \
+              | jq -r '.sha' | cut -c1-12)
+          fi
+          echo "commit=${NPU_COMMIT}" >> $GITHUB_OUTPUT
+          echo "torch-npu commit: ${NPU_COMMIT}"
+
+      - name: Determine CANN version
+        id: cann
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            CANN_VER="${{ inputs.cann_version }}"
+          else
+            # 从兼容矩阵获取推荐的 CANN 版本
+            CANN_VER="8.0.RC1"  # 默认使用稳定版本
+          fi
+          echo "version=${CANN_VER}" >> $GITHUB_OUTPUT
+
+  build:
+    needs: get-versions
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+      build_status: ${{ steps.build.outputs.status }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to SWR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.SWR_USERNAME }}
+          password: ${{ secrets.SWR_PASSWORD }}
+
+      - name: Check compatibility matrix
+        id: compatibility
+        run: |
+          PY_VER="${{ needs.get-versions.outputs.pytorch_version }}"
+          CANN_VER="${{ needs.get-versions.outputs.cann_version }}"
+
+          # 验证版本组合是否已知兼容
+          # 这里可以调用兼容性检查 API 或读取兼容矩阵文件
+          echo "compatible=true" >> $GITHUB_OUTPUT
+          echo "Checking compatibility: PyTorch ${PY_VER} + CANN ${CANN_VER}"
+
+      - name: Generate image tag
+        id: meta
+        run: |
+          DATE=$(date -u +"%Y%m%d")
+          PY_VER="${{ needs.get-versions.outputs.pytorch_version }}"
+          CANN_VER="${{ needs.get-versions.outputs.cann_version }}"
+
+          # 简化版本号用于 tag
+          PY_TAG=$(echo "${PY_VER}" | sed 's/\.dev/-dev/')
+          TAG="py${PY_TAG}-cann${CANN_VER}-${DATE}"
+
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "### Test Image Tag: ${TAG}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build Test Image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./dockerfiles/test-npu
+          file: ./dockerfiles/test-npu/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly
+          build-args: |
+            RUNNER_IMAGE=ascend-ci/runner-npu:cann${{ needs.get-versions.outputs.cann_version }}-latest
+            PYTORCH_VERSION=${{ needs.get-versions.outputs.pytorch_version }}
+            TORCH_NPU_COMMIT=${{ needs.get-versions.outputs.torch_npu_commit }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly
+          cache-to: type=inline
+
+      - name: Verify build success
+        if: success()
+        run: |
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Trigger compatibility verification
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.WORKFLOW_TOKEN }}
+          script: |
+            github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event_type: 'test-image-built',
+              client_payload: {
+                test_image: '${{ steps.meta.outputs.tag }}',
+                pytorch_version: '${{ needs.get-versions.outputs.pytorch_version }}',
+                pytorch_commit: '${{ needs.get-versions.outputs.pytorch_commit }}',
+                cann_version: '${{ needs.get-versions.outputs.cann_version }}',
+                torch_npu_commit: '${{ needs.get-versions.outputs.torch_npu_commit }}'
+              }
+            });
+
+      - name: Upload build info
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-image-info
+          path: |
+            test_image_info.json
+```
+
+### 3.6 兼容性验证 Workflow
+
+```yaml
+# .github/workflows/verify-compatibility.yml
+
+name: verify-compatibility
+
+on:
+  repository_dispatch:
+    types: [test-image-built]
+  workflow_dispatch:
+    inputs:
+      test_image:
+        description: 'Test image tag to verify'
+        required: true
+
+jobs:
+  verify:
+    runs-on: [self-hosted, npu-910b]
+    timeout-minutes: 30
+    outputs:
+      status: ${{ steps.verify.outputs.status }}
+
+    steps:
+      - name: Get version info
+        id: versions
+        run: |
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            echo "pytorch_version=${{ github.event.client_payload.pytorch_version }}" >> $GITHUB_OUTPUT
+            echo "cann_version=${{ github.event.client_payload.cann_version }}" >> $GITHUB_OUTPUT
+            echo "torch_npu_commit=${{ github.event.client_payload.torch_npu_commit }}" >> $GITHUB_OUTPUT
+            echo "test_image=${{ github.event.client_payload.test_image }}" >> $GITHUB_OUTPUT
+          else
+            echo "test_image=${{ inputs.test_image }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pull Test Image
+        run: |
+          docker pull swr.cn-east-3.myhuaweicloud.com/ascend-ci/test-npu:${{ steps.versions.outputs.test_image }}
+
+      - name: Setup NPU environment
+        run: |
+          npu-smi info
+          sudo chmod 666 /dev/davinci* 2>/dev/null || true
+          sudo chmod 666 /dev/davinci_manager 2>/dev/null || true
+
+      - name: Run Smoke Tests in container
+        id: verify
+        run: |
+          docker run --rm \
+            --device=/dev/davinci0 \
+            --device=/dev/davinci_manager \
+            -e PYTORCH_TESTING_DEVICE_ONLY_FOR=npu \
+            swr.cn-east-3.myhuaweicloud.com/ascend-ci/test-npu:${{ steps.versions.outputs.test_image }} \
+            python -c "
+import torch
+import torch_npu
+
+print(f'PyTorch: {torch.__version__}')
+print(f'torch_npu available: {torch.npu.is_available()}')
+print(f'NPU count: {torch.npu.device_count()}')
+
+# 基本张量操作
+x = torch.randn(2, 3).to('npu')
+y = x + x
+print(f'Tensor ops: OK')
+
+# 简单模型
+model = torch.nn.Linear(3, 2).to('npu')
+out = model(x)
+print(f'Model forward: OK')
+"
+
+          if [[ $? -eq 0 ]]; then
+            echo "status=verified" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update compatibility matrix
+        if: always()
+        run: |
+          STATUS="${{ steps.verify.outputs.status }}"
+          DATE=$(date -u +"%Y-%m-%d")
+
+          cat > compatibility_entry.json << EOF
+          {
+            "pytorch_version": "${{ steps.versions.outputs.pytorch_version }}",
+            "cann_version": "${{ steps.versions.outputs.cann_version }}",
+            "torch_npu_commit": "${{ steps.versions.outputs.torch_npu_commit }}",
+            "test_image": "${{ steps.versions.outputs.test_image }}",
+            "status": "${STATUS}",
+            "verified_date": "${DATE}"
+          }
+          EOF
+
+          # 更新兼容矩阵文件（实际需要追加到现有文件）
+          echo "Compatibility entry created"
+
+      - name: Upload compatibility entry
+        uses: actions/upload-artifact@v4
+        with:
+          name: compatibility-entry-${{ steps.versions.outputs.test_image }}
+          path: compatibility_entry.json
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::warning::Compatibility verification failed for ${{ steps.versions.outputs.test_image }}"
+          # 实际应发送通知（邮件、Slack 等）
+
+  update-matrix:
+    needs: verify
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download compatibility entry
+        uses: actions/download-artifact@v4
+        with:
+          pattern: compatibility-entry-*
+
+      - name: Update compatibility_matrix.json
+        run: |
+          # 读取现有兼容矩阵
+          if [[ -f "compatibility_matrix.json" ]]; then
+            MATRIX=$(cat compatibility_matrix.json)
+          else
+            MATRIX='{"version_matrix": [], "metadata": {}}'
+          fi
+
+          # 合合新条目
+          NEW_ENTRY=$(cat compatibility_entry*/compatibility_entry.json)
+          jq ".version_matrix += [${NEW_ENTRY}]" <<< "${MATRIX}" > compatibility_matrix_new.json
+
+          # 更新元数据
+          jq ".metadata.last_updated = \"$(date -u)\"" compatibility_matrix_new.json > compatibility_matrix.json
+
+      - name: Commit compatibility matrix update
+        run: |
+          git config user.name "CI Bot"
+          git config user.email "ci-bot@example.com"
+          git add compatibility_matrix.json
+          git commit -m "Update compatibility matrix: ${{ needs.verify.outputs.status }}"
+          git push
+```
+
+### 3.7 镜像清理 Workflow
+
+```yaml
+# .github/workflows/cleanup-images.yml
+
+name: cleanup-images
+
+on:
+  schedule:
+    # 每日凌晨 3 点执行清理
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Login to SWR
+        uses: docker/login-action@v3
+        with:
+          registry: swr.cn-east-3.myhuaweicloud.com
+          username: ${{ secrets.SWR_USERNAME }}
+          password: ${{ secrets.SWR_PASSWORD }}
+
+      - name: Get image list
+        id: images
+        run: |
+          # 获取所有镜像 tag
+          docker images --format "{{.Repository}}:{{.Tag}}" | grep "ascend-ci/" > image_list.txt
+          echo "Found images:"
+          cat image_list.txt
+
+      - name: Apply retention policy
+        run: |
+          DATE=$(date -u +"%Y%m%d")
+          RETENTION_DAYS=30
+          CUTOFF_DATE=$(date -u -d "-${RETENTION_DAYS} days" +"%Y%m%d")
+
+          echo "Cutoff date: ${CUTOFF_DATE}"
+          echo "Removing test images older than ${RETENTION_DAYS} days..."
+
+          # 模拟清理（实际需要调用 SWR API）
+          while read -r image; do
+            TAG=$(echo "$image" | cut -d':' -f2)
+            IMG_DATE=$(echo "$TAG" | grep -oP '\d{8}' | tail -1)
+
+            if [[ -n "$IMG_DATE" && "$IMG_DATE" < "$CUTOFF_DATE" ]]; then
+              # 检查是否是稳定版本（不删除）
+              if [[ ! "$TAG" =~ "stable" ]]; then
+                echo "Would delete: $image"
+                # docker rmi "$image"  # 实际删除命令
+              fi
+            fi
+          done < image_list.txt
+
+      - name: Report cleanup summary
+        run: |
+          echo "### Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "Retention policy: ${RETENTION_DAYS} days" >> $GITHUB_STEP_SUMMARY
+          echo "Images checked: $(wc -l < image_list.txt)" >> $GITHUB_STEP_SUMMARY
+```
+
+### 3.8 Workflow 触发关系图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Workflow 触发关系                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  外部触发源:                                                                  │
+│  ───────────                                                                │
+│  ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐       │
+│  │ CANN 版本发布   │     │ PyTorch nightly │     │ torch-npu 提交  │       │
+│  │ (华为官方)      │     │ (每日更新)      │     │ (GitCode)       │       │
+│  └─────────────────┘     └─────────────────┘     └─────────────────┘       │
+│         │                        │                        │                 │
+│         │ repository_dispatch    │ schedule               │ dispatch        │
+│         ↓                        ↓                        ↓                 │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ build-cann-image.yml                                                   │ │
+│  │         │                                                              │ │
+│  │         │ cann-image-built (dispatch)                                  │ │
+│  │         ↓                                                              │ │
+│  │ ┌───────────────────────────────────────────────────────────────────┐ │ │
+│  │ │ build-runner-image.yml                                             │ │ │
+│  │ │         │                                                          │ │ │
+│  │ │         │ runner-image-built (隐式，通过 tag 更新)                  │ │ │
+│  │ │         ↓                                                          │ │ │
+│  │ │ ┌───────────────────────────────────────────────────────────────┐ │ │ │
+│  │ │ │ build-test-image.yml                                           │ │ │ │
+│  │ │ │         │                                                      │ │ │ │
+│  │ │ │         │ test-image-built (dispatch)                          │ │ │ │
+│  │ │ │         ↓                                                      │ │ │ │
+│  │ │ │ ┌───────────────────────────────────────────────────────────┐ │ │ │ │
+│  │ │ │ │ verify-compatibility.yml                                   │ │ │ │ │
+│  │ │ │ │         │                                                  │ │ │ │ │
+│  │ │ │ │         │ 更新兼容矩阵                                      │ │ │ │ │
+│  │ │ │ │         ↓                                                  │ │ │ │ │
+│  │ │ │ │ ┌─────────────────────────────────────────────────────────┐│ │ │ │ │
+│  │ │ │ │ │ compatibility_matrix.json                                ││ │ │ │ │
+│  │ │ │ │ └─────────────────────────────────────────────────────────┘│ │ │ │ │
+│  │ │ │ └───────────────────────────────────────────────────────────┘ │ │ │ │
+│  │ │ └───────────────────────────────────────────────────────────────┘ │ │ │
+│  │ └───────────────────────────────────────────────────────────────────┘ │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+│  定时清理:                                                                   │
+│  ───────────                                                                │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ cleanup-images.yml (每日 03:00 UTC)                                    │ │
+│  │   - 删除过期镜像                                                        │ │
+│  │   - 更新镜像清单                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 五、环境变量对照表
+## 四、第一阶段方案设计：PR 集成验证
 
-| CUDA | ROCm | XPU | **NPU (Ascend)** |
-|------|------|-----|------------------|
-| `CUDA_VERSION` | `ROCM_VERSION` | `XPU_VERSION` | `NPU_VERSION` (CANN版本) |
-| `CUDA_PATH` | `ROCM_HOME` | - | `ASCEND_HOME` |
-| `CUDA_HOME` | `ROCM_PATH` | - | `ASCEND_TOOLKIT_HOME` |
-| `LD_LIBRARY_PATH` (cuda) | `LD_LIBRARY_PATH` (rocm) | - | `LD_LIBRARY_PATH` (ascend) |
-| - | `PYTORCH_ROCM_ARCH` | - | `NPU_ARCH` / `PYTORCH_NPU_ARCH` |
-| NCCL | RCCL | - | HCCL |
-| cuDNN | MIOpen | oneDNN | ACL (Ascend Computing Library) |
-| nvcc | hipcc | icx | ascend compiler |
-| nvidia-smi | amd-smi, rocminfo | xpu-smi | npu-smi |
+### 4.1 设计目标
 
----
+第一阶段的核心目标：让 torch-npu 的 PR 或最新代码能够及时与 PyTorch 集成测试，类似 NV/AMD 设备在 PyTorch 主仓的基础测试体验。
 
-## 六、实施计划
+**关键指标**：
 
-### 阶段一：基础镜像构建 (Week 1-2)
+| 指标 | 目标值 | 说明 |
+|------|--------|------|
+| 触发延迟 | < 1 分钟 | PR 提交后立即触发 |
+| Smoke 测试 | < 15 分钟 | 快速验证基本功能 |
+| 完整测试 | < 60 分钟 | 设备无关测试 + NPU 特定测试 |
+| 反馈方式 | PR Comment | 结果直接反馈到 PR |
 
-1. 创建 `ubuntu-npu/Dockerfile`
-2. 创建 `common/install_npu.sh`
-3. 更新 `build.sh` 配置
-4. 测试镜像构建
+### 4.2 torch-npu 与 PyTorch 集成机制
 
-### 阶段二：CI Workflow 配置 (Week 3-4)
+#### 4.2.1 PrivateUse1 Backend
 
-1. 创建 `_npu-test.yml`
-2. 创建 `npu-910b.yml`
-3. 创建 Setup/Teardown Actions
-4. 更新 `test.sh` NPU处理
+torch-npu 使用 PyTorch 的 `PrivateUse1` 机制注册 NPU 设备，这是实现设备扩展的核心机制：
 
-### 阶段三：高级功能 (Week 5-6)
+```python
+# torch_npu/__init__.py
 
-1. 分布式测试 Workflow
-2. 性能基准测试 Workflow
-3. Nightly构建 Workflow
-4. 监控和告警配置
+import torch
+import torch_npu
 
-### 阶段四：门禁集成 (Week 7)
+# 1. 重命名 PrivateUse1 后端为 "npu"
+torch.utils.rename_privateuse1_backend("npu")
 
-1. 集成 `_runner-determinator.yml`
-2. 配置 PR Label 控制
-3. 灰度发布配置
+# 2. 注册 NPU 模块到 PyTorch
+torch._register_device_module('npu', torch_npu.npu)
 
----
+# 3. 生成设备相关方法（类似 torch.cuda）
+torch.utils.generate_methods_for_privateuse1_backend(
+    for_tensor=True,       # tensor.to('npu'), tensor.npu()
+    for_module=True,       # module.to('npu')
+    for_storage=True,      # storage.npu()
+    unsupported_dtype=[]
+)
 
-## 七、参考资源
+# 结果：torch.npu 可用，API 与 torch.cuda 对齐
+# - torch.npu.is_available()
+# - torch.npu.current_device()
+# - torch.npu.device_count()
+# - tensor.to('npu') / tensor.npu()
+```
 
-- PyTorch ROCm镜像: `.ci/docker/ubuntu-rocm/`
-- PyTorch XPU镜像: `.ci/docker/ubuntu-xpu/`
-- CANN文档: https://www.hiascend.com/document
-- HCCL文档: https://www.hiascend.com/document/detail/zh/canncommercial/700/featureintro/HCCLfeatureintro/HCCL_01_0001.html
-- npu-smi工具: https://www.hiascend.com/document/detail/zh/canncommercial/700/tools/npusmi/npusmi_01_0001.html
+#### 4.2.2 设备无关测试框架
 
----
-
-## 八、NPU 测试用例设计
-
-### 8.1 设备无关测试框架概述
-
-PyTorch 提供了 `instantiate_device_type_tests` 机制，允许同一测试模板为不同设备类型实例化测试。这是实现设备无关测试的核心机制。
+PyTorch 提供了 `instantiate_device_type_tests` 机制，允许同一测试模板为不同设备实例化测试：
 
 ```python
 # torch/testing/_internal/common_device_type.py
-
-# 设备测试基类
-class DeviceTypeTestBase(TestCase):
-    device_type: str = "generic_device_type"
-
-# 设备测试基类列表
-device_type_test_bases = [CPUTestBase, CUDATestBase, XPUTestBase, MPSTestBase, ...]
-```
-
-#### 环境变量控制
-
-| 环境变量 | 说明 | 示例 |
-|---------|------|------|
-| `PYTORCH_TESTING_DEVICE_ONLY_FOR` | 仅运行指定设备的测试 | `npu` 或 `npu,cpu` |
-| `PYTORCH_TESTING_DEVICE_EXCEPT_FOR` | 排除指定设备的测试 | `cuda,xpu` |
-| `TORCH_TEST_DEVICES` | 自定义测试设备路径 | `/path/to/npu_test_base.py` |
-
-### 8.2 设备无关测试用例列表
-
-以下测试文件使用 `instantiate_device_type_tests`，可在 CPU、CUDA、XPU、NPU 等设备上运行：
-
-#### 8.2.1 核心运算测试
-
-| 测试文件 | 测试内容 | 设备无关性 |
-|---------|---------|-----------|
-| `test_ops.py` | 算子测试 (OpInfo) | ✅ 使用 `instantiate_device_type_tests` |
-| `test_ops_gradients.py` | 算子梯度测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_ops_fwd_gradients.py` | 前向梯度测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_prims.py` | 原语算子测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_reductions.py` | 归约操作测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_view_ops.py` | 视图操作测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_unary_ufuncs.py` | 一元通用函数测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_binary_ufuncs.py` | 二元通用函数测试 | ✅ 通过 run_test.py |
-| `test_indexing.py` | 索引操作测试 | ✅ 通过 run_test.py |
-| `test_scatter_gather_ops.py` | 散射/聚集操作测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_tensor_creation_ops.py` | 张量创建操作测试 | ✅ 使用 `instantiate_device_type_tests` |
-
-#### 8.2.2 数学运算测试
-
-| 测试文件 | 测试内容 | 设备无关性 |
-|---------|---------|-----------|
-| `test_linalg.py` | 线性代数测试 | ✅ 通过 run_test.py |
-| `test_spectral_ops.py` | 频谱操作测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_segment_reductions.py` | 分段归约测试 | ✅ 通过 run_test.py |
-| `test_complex.py` | 复数运算测试 | ✅ 通过 run_test.py |
-
-#### 8.2.3 张量特性测试
-
-| 测试文件 | 测试内容 | 设备无关性 |
-|---------|---------|-----------|
-| `test_sparse.py` | 稀疏张量测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_sparse_csr.py` | CSR稀疏张量测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_nestedtensor.py` | 嵌套张量测试 | ✅ 通过 run_test.py |
-| `test_namedtensor.py` | 命名张量测试 | ✅ 通过 run_test.py |
-| `test_fake_tensor.py` | FakeTensor测试 | ✅ 通过 run_test.py |
-
-#### 8.2.4 自动求导测试
-
-| 测试文件 | 测试内容 | 设备无关性 |
-|---------|---------|-----------|
-| `test_autograd.py` | 自动求导核心测试 | ✅ 通过 run_test.py |
-| `test_functionalization.py` | 函数化测试 | ✅ 通过 run_test.py |
-| `test_expanded_weights.py` | 扩展权重测试 | ✅ 通过 run_test.py |
-
-#### 8.2.5 神经网络测试
-
-| 测试文件 | 测试内容 | 设备无关性 |
-|---------|---------|-----------|
-| `test_nn.py` | 神经网络模块测试 | ✅ 通过 run_test.py |
-| `test_modules.py` | 模块测试 | ✅ 通过 run_test.py |
-| `test_optim.py` | 优化器测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_transformers.py` | Transformer相关测试 | ✅ 使用 `instantiate_device_type_tests` |
-
-#### 8.2.6 编译器/Inductor测试
-
-| 测试文件 | 测试内容 | 设备无关性 |
-|---------|---------|-----------|
-| `inductor/test_torchinductor.py` | Inductor核心测试 | ✅ 支持多设备 |
-| `inductor/test_aot_inductor.py` | AOT Inductor测试 | ✅ 支持多设备 |
-| `test_decomp.py` | 分解规则测试 | ✅ 通过 run_test.py |
-| `test_dispatch.py` | 分发机制测试 | ✅ 通过 run_test.py |
-
-#### 8.2.7 其他通用测试
-
-| 测试文件 | 测试内容 | 设备无关性 |
-|---------|---------|-----------|
-| `test_torch.py` | PyTorch核心功能测试 | ✅ 通过 run_test.py |
-| `test_serialization.py` | 序列化测试 | ✅ 通过 run_test.py |
-| `test_dataloader.py` | 数据加载器测试 | ✅ 通过 run_test.py |
-| `test_utils.py` | 工具函数测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_type_promotion.py` | 类型提升测试 | ✅ 使用 `instantiate_device_type_tests` |
-| `test_testing.py` | 测试框架测试 | ✅ 使用 `instantiate_device_type_tests` |
-
-### 8.3 NPU 测试配置
-
-#### 8.3.1 run_test.py 配置新增
-
-```python
-# test/run_test.py 新增配置
-
-# NPU 特有测试
-NPU_TEST = [
-    "test_npu",
-]
-
-# NPU 需要跳过的测试 (待完善)
-NPU_BLOCKLIST = [
-    # 根据 Ascend/pytorch 实际情况补充
-    # "test_autograd",  # 示例：如果 autograd 某些功能不支持
-]
-
-# XPU_BLOCKLIST 作为参考
-XPU_BLOCKLIST = [
-    "test_autograd",
-    "profiler/test_memory_profiler",
-]
-```
-
-#### 8.3.2 test.sh NPU 处理
-
-```bash
-# .ci/pytorch/test.sh 新增 NPU 处理
-
-if [[ "$BUILD_ENVIRONMENT" == *npu* ]]; then
-  export PYTORCH_TESTING_DEVICE_ONLY_FOR="npu"
-  export PYTHON_TEST_EXTRA_OPTION="--npu"
-
-  # 激活 NPU 环境
-  if [ -f /usr/local/Ascend/bin/setenv.bash ]; then
-    source /usr/local/Ascend/bin/setenv.bash
-  fi
-
-  # 检查 NPU 状态
-  echo "Checking NPU status..."
-  npu-smi info
-
-  # 设置 NPU 架构
-  if [ -n "$NPU_ARCH" ]; then
-    echo "NPU_ARCH: $NPU_ARCH"
-  fi
-fi
-
-# NPU Smoke 测试函数
-test_python_smoke_npu() {
-  # NPU Smoke 测试
-  python test/run_test.py --include test_transformers $PYTHON_TEST_EXTRA_OPTION --upload-artifacts-while-running
-  assert_git_not_dirty
-}
-
-# NPU 二进制测试函数
-test_npu_bin() {
-  # 运行 NPU 特有的二进制测试
-  for npu_case in "${BUILD_BIN_DIR}"/*npu*; do
-    if [[ "$npu_case" != *"*"* && "$npu_case" != *.so && "$npu_case" != *.a ]]; then
-      case_name=$(basename "$npu_case")
-      "$npu_case" --gtest_output=xml:"$TEST_REPORTS_DIR"/"$case_name".xml
-    fi
-  done
-}
-```
-
-#### 8.3.3 run_test.py 参数新增
-
-```python
-# test/run_test.py 新增 --npu 参数
-
-parser.add_argument(
-    "--npu",
-    "--npu",
-    action="store_true",
-    help=("If this flag is present, we will run npu tests except NPU_BLOCK_LIST"),
-)
-
-# NPU 测试选择逻辑
-if options.npu:
-    selected_tests = exclude_tests(NPU_BLOCKLIST, selected_tests, "on NPU")
-else:
-    # 排除 NPU 特有测试
-    options.exclude.extend(NPU_TEST)
-```
-
-### 8.4 NPU 测试基类设计
-
-参考 `XPUTestBase` 和 `PrivateUse1TestBase`，设计 NPU 测试基类：
-
-```python
-# torch_npu/testing/_internal/test_base.py
-
-import torch
-from torch.testing._internal.common_device_type import DeviceTypeTestBase
 
 class NPUTestBase(DeviceTypeTestBase):
     device_type = "npu"
@@ -1169,906 +1493,1152 @@ class NPUTestBase(DeviceTypeTestBase):
         cls.primary_device = f"npu:{torch.npu.current_device()}"
         cls.device_mod = torch.npu
 
-    @classmethod
-    def instantiate_test(cls, name, test, generic_cls=None):
-        # 实例化测试
-        return super().instantiate_test(name, test, generic_cls)
+# 通过环境变量启用 NPU 测试
+# export PYTORCH_TESTING_DEVICE_ONLY_FOR="npu"
 ```
 
-### 8.5 测试分类策略
+#### 4.2.3 环境变量控制
 
-#### 8.5.1 按测试类型分类
+| 环境变量 | 说明 | 用法 |
+|---------|------|------|
+| `PYTORCH_TESTING_DEVICE_ONLY_FOR` | 仅运行指定设备测试 | `npu` 或 `npu,cpu` |
+| `PYTORCH_TESTING_DEVICE_EXCEPT_FOR` | 排除指定设备测试 | `cuda,xpu` |
+| `TORCH_TEST_DEVICES` | 自定义测试设备路径 | `/path/to/npu_test_base.py` |
 
-| 测试类型 | 说明 | 示例测试 |
-|---------|------|---------|
-| **Smoke 测试** | 快速验证核心功能 | `test_transformers`, `test_ops` |
-| **Default 测试** | 默认测试集 | 分片运行所有设备无关测试 |
-| **Distributed 测试** | 分布式相关测试 | `distributed/test_c10d*`, `distributed/tensor/*` |
-| **Slow 测试** | 耗时较长的测试 | `test_jit`, `test_nn` (slow模式) |
-| **Inductor 测试** | 编译器相关测试 | `inductor/test_torchinductor*` |
+### 4.3 集成验证流程
 
-#### 8.5.2 按测试优先级分类
-
-| 优先级 | 测试类型 | 运行频率 |
-|-------|---------|---------|
-| P0 | Smoke 测试 | 每次提交 |
-| P1 | Default 测试 | 每次提交 |
-| P2 | Distributed 测试 | 每日 |
-| P3 | Slow 测试 | 每周 |
-| P4 | 性能基准测试 | 每日 |
-
-### 8.6 测试矩阵配置
-
-#### 8.6.1 默认测试矩阵
-
-```yaml
-# npu-910b.yml 测试矩阵
-test-matrix: |
-  { include: [
-    # Default 测试 - 6分片
-    { config: "default", shard: 1, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-    { config: "default", shard: 2, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-    { config: "default", shard: 3, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-    { config: "default", shard: 4, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-    { config: "default", shard: 5, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-    { config: "default", shard: 6, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-  ]}
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    torch-npu PR 集成验证流程                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Step 1: PR 触发                                                             │
+│  ─────────────────                                                          │
+│  torch-npu PR 提交 → GitHub Webhook → pytorch-infra workflow 触发            │
+│                                                                             │
+│  Step 2: PyTorch Nightly 获取                                                │
+│  ───────────────────────                                                    │
+│  pip install --pre torch --index-url https://download.pytorch.org/whl/nightly│
+│  记录版本信息：PyTorch version + commit SHA                                  │
+│                                                                             │
+│  Step 3: torch-npu 构建                                                      │
+│  ───────────────────                                                        │
+│  python setup.py bdist_wheel → 安装 torch_npu wheel                          │
+│                                                                             │
+│  Step 4: 测试执行                                                            │
+│  ─────────────                                                              │
+│  Layer 1: Smoke Tests (2-5 min)                                             │
+│    - torch_npu 导入验证                                                     │
+│    - NPU 设备检测                                                           │
+│    - 基本张量操作                                                           │
+│                                                                             │
+│  Layer 2: Device-Agnostic Tests (15-30 min)                                 │
+│    - PyTorch 通用测试的 NPU 子集                                             │
+│    - test_torch.py, test_ops.py, test_nn.py                                 │
+│    - 分片执行                                                               │
+│                                                                             │
+│  Layer 3: NPU-Specific Tests (30-60 min)                                    │
+│    - torch-npu 专用测试                                                     │
+│    - NPU 算子、图模式等                                                     │
+│                                                                             │
+│  Step 5: 结果反馈                                                            │
+│  ─────────────                                                              │
+│  - PR Comment: 测试摘要                                                     │
+│  - GitHub Check: 通过/失败状态                                              │
+│  - Issue: 失败时自动创建兼容性问题                                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 8.6.2 分布式测试矩阵
+### 4.4 测试分层策略
 
-```yaml
-# npu-distributed.yml 测试矩阵
-test-matrix: |
-  { include: [
-    { config: "distributed", shard: 1, num_shards: 3, runner: "linux.npu.gpu.910b.4" },
-    { config: "distributed", shard: 2, num_shards: 3, runner: "linux.npu.gpu.910b.4" },
-    { config: "distributed", shard: 3, num_shards: 3, runner: "linux.npu.gpu.910b.4" },
-  ]}
+#### 4.4.1 分层架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          测试分层策略                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Layer 1: Smoke Tests (2-5 分钟)                                      │   │
+│  │ ─────────────────────────────────────────────────────────────────── │   │
+│  │ 目的: 快速验证基本功能，发现严重集成问题                                 │   │
+│  │ 触发: 每个 PR 必须                                                    │   │
+│  │ 阻塞: 必须通过才能继续下一层                                            │   │
+│  │ 内容:                                                                │   │
+│  │   - torch_npu 导入测试                                               │   │
+│  │   - NPU 设备检测和初始化                                              │   │
+│  │   - 简单张量创建和运算                                                │   │
+│  │   - PrivateUse1 后端注册验证                                          │   │
+│  │   - 与 torch.cuda API 对齐检查                                        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Layer 2: Device-Agnostic Tests (15-30 分钟)                          │   │
+│  │ ─────────────────────────────────────────────────────────────────── │   │
+│  │ 目的: 验证 PyTorch 通用功能在 NPU 上的正确性                           │   │
+│  │ 触发: Smoke 通过后                                                   │   │
+│  │ 阻塞: 建议通过才能合入 PR                                              │   │
+│  │ 内容:                                                                │   │
+│  │   - test_torch.py (核心张量操作)                                     │   │
+│  │   - test_ops.py (算子测试)                                           │   │
+│  │   - test_nn.py (神经网络模块)                                        │   │
+│  │   - test_autograd.py (自动微分)                                      │   │
+│  │ 方式: 6 分片并行执行                                                  │   │
+│  │ 环境: PYTORCH_TESTING_DEVICE_ONLY_FOR=npu                            │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Layer 3: NPU-Specific Tests (30-60 分钟)                             │   │
+│  │ ─────────────────────────────────────────────────────────────────── │   │
+│  │ 目的: 验证 torch-npu 专用功能                                        │   │
+│  │ 触发: Device-Agnostic 通过后                                         │   │
+│  │ 阻塞: 必须通过                                                       │   │
+│  │ 内容:                                                                │   │
+│  │   - test/test_npu.py (NPU 核心功能)                                  │   │
+│  │   - test/test_custom_op.py (自定义算子)                              │   │
+│  │   - test/test_aclnn.py (ACL NN 算子)                                 │   │
+│  │ 方式: pytest -n auto 并行执行                                        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Layer 4: Extended Tests (异步执行，不阻塞 PR)                         │   │
+│  │ ─────────────────────────────────────────────────────────────────── │   │
+│  │ 目的: 深度验证复杂场景                                                │   │
+│  │ 触发: PR 合入后或每日定时                                             │   │
+│  │ 阻塞: 不阻塞 PR 合入                                                  │   │
+│  │ 内容:                                                                │   │
+│  │   - distributed/test_c10d* (分布式训练)                              │   │
+│  │   - test/test_hccl.py (HCCL 通信)                                    │   │
+│  │   - inductor/test_torchinductor.py (Inductor 编译)                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 8.7 NPU 特有测试用例
+#### 4.4.2 参考其他设备在 PyTorch 主仓的测试模式
 
-以下测试用例需要在 NPU 设备上运行，用于验证 NPU 特有功能：
+| 设备 | Smoke 测试 | Default 测试 | 分布式测试 | 触发方式 |
+|------|-----------|-------------|-----------|---------|
+| **CUDA** | test_cuda_smoke | trunk.yml 分片 | distributed | 每次 PR |
+| **ROCm** | test_transformers (smoke) | rocm-mi300.yml 6分片 | rocm-distributed | 定时 + tag |
+| **XPU** | smoke_xpu | xpu.yml 6-12分片 | - | 定时 + tag |
+| **NPU (设计)** | smoke_test.py | 6分片 | Layer 4 | PR 触发 |
 
-| 测试文件 | 测试内容 | 备注 |
-|---------|---------|------|
-| `test_npu.py` | NPU 核心功能测试 | 类似 `test_xpu.py` |
-| `npu/test_custom_op.py` | NPU 自定义算子测试 | NPU 特有算子 |
-| `npu/test_aclnn.py` | ACL NN 算子测试 | CANN 算子封装 |
-| `npu/test_hccl.py` | HCCL 通信测试 | 分布式通信 |
-| `npu/test_graph_mode.py` | 图模式测试 | NPU 图执行模式 |
-
-### 8.8 测试排除列表 (Blocklist)
-
-根据 XPU 和 ROCm 的经验，NPU 可能需要在以下测试中进行适配：
+#### 4.4.3 Smoke Test 设计
 
 ```python
-# test/run_test.py
+# test/smoke_test.py
+
+"""
+torch-npu Smoke 测试
+目的：快速验证 torch-npu 与 PyTorch nightly 的基本集成
+运行时间：2-5 分钟
+"""
+
+import sys
+import torch
+
+def test_pytorch_import():
+    """验证 PyTorch 版本"""
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"PyTorch commit: {torch.__git_version__}")
+    assert torch.__version__.startswith("2."), "PyTorch version check failed"
+    print("✓ PyTorch import successful")
+
+def test_torch_npu_import():
+    """验证 torch_npu 导入"""
+    try:
+        import torch_npu
+        print(f"torch_npu version: {torch_npu.__version__}")
+        print("✓ torch_npu import successful")
+    except ImportError as e:
+        print(f"✗ torch_npu import failed: {e}")
+        raise
+
+def test_npu_device():
+    """验证 NPU 设备可用"""
+    import torch_npu
+
+    assert torch.npu.is_available(), "NPU not available"
+    device_count = torch.npu.device_count()
+    print(f"✓ NPU available, count: {device_count}")
+
+    if device_count > 0:
+        device = torch.npu.current_device()
+        device_name = torch.npu.get_device_name(device)
+        print(f"  Device: {device}, Name: {device_name}")
+
+def test_tensor_operations():
+    """验证基本张量操作"""
+    # CPU 张量
+    x = torch.randn(2, 3)
+    print(f"✓ Tensor creation on CPU: shape={x.shape}")
+
+    # 移动到 NPU
+    x_npu = x.to('npu')
+    assert x_npu.device.type == 'npu'
+    print(f"✓ Tensor moved to NPU")
+
+    # NPU 运算
+    y_npu = x_npu + x_npu
+    z_npu = torch.matmul(x_npu, x_npu.T)
+    print(f"✓ Basic operations: add, matmul")
+
+    # 移回 CPU
+    z_cpu = z_npu.cpu()
+    assert z_cpu.device.type == 'cpu'
+    print(f"✓ Tensor moved back to CPU")
+
+def test_nn_module():
+    """验证神经网络模块"""
+    model = torch.nn.Linear(10, 5)
+    model_npu = model.to('npu')
+
+    input_npu = torch.randn(2, 10).to('npu')
+    output_npu = model_npu(input_npu)
+
+    print(f"✓ NN module forward pass: output shape={output_npu.shape}")
+
+def test_api_alignment():
+    """验证与 torch.cuda API 对齐"""
+    apis = [
+        'is_available',
+        'device_count',
+        'current_device',
+        'get_device_name',
+        'synchronize',
+    ]
+
+    for api in apis:
+        assert hasattr(torch.npu, api), f"torch.npu.{api} missing"
+    print(f"✓ API alignment verified")
+
+def test_privateuse1_backend():
+    """验证 PrivateUse1 后端注册"""
+    backend_name = torch.utils.backend_registration._get_privateuse1_backend_name()
+    assert backend_name == 'npu', f"Backend name mismatch: {backend_name}"
+    print(f"✓ PrivateUse1 backend registered as 'npu'")
+
+def main():
+    tests = [
+        ("PyTorch Import", test_pytorch_import),
+        ("torch_npu Import", test_torch_npu_import),
+        ("NPU Device", test_npu_device),
+        ("Tensor Operations", test_tensor_operations),
+        ("NN Module", test_nn_module),
+        ("API Alignment", test_api_alignment),
+        ("PrivateUse1 Backend", test_privateuse1_backend),
+    ]
+
+    print("=" * 60)
+    print("torch-npu Smoke Tests")
+    print("=" * 60)
+
+    passed, failed = 0, 0
+    for name, test in tests:
+        try:
+            test()
+            passed += 1
+        except Exception as e:
+            print(f"✗ {name} failed: {e}")
+            failed += 1
+
+    print("=" * 60)
+    print(f"Results: {passed} passed, {failed} failed")
+    print("=" * 60)
+
+    sys.exit(0 if failed == 0 else 1)
+
+if __name__ == "__main__":
+    main()
+```
+
+#### 4.4.4 Device-Agnostic Test 选择
+
+推荐的 PyTorch 设备无关测试（参考 ROCm/XPU 模式）：
+
+| 优先级 | 测试文件 | 说明 | 分片建议 |
+|-------|---------|------|---------|
+| **P0** | `test_torch.py` | 核心张量操作 | shard 1-2 |
+| **P0** | `test_ops.py` | 算子测试（OpInfo） | shard 3-4 |
+| **P1** | `test_nn.py` | 神经网络模块 | shard 5 |
+| **P1** | `test_autograd.py` | 自动微分 | shard 6 |
+
+#### 4.4.5 NPU Blocklist
+
+```python
+# 不在 NPU 上运行的测试
 
 NPU_BLOCKLIST = [
-    # 自动求导相关 (部分功能可能不支持)
-    # "test_autograd",
-
-    # Profiler 相关 (NPU profiler 实现可能不同)
-    # "profiler/test_memory_profiler",
-
-    # CUDA 特有测试 (不应在 NPU 上运行)
+    # 其他设备特有测试
     "test_cuda",
     "test_cuda_multigpu",
-    "test_cuda_primary_ctx",
-    "test_cuda_sanitizer",
-    "test_matmul_cuda",
-    "test_scaled_matmul_cuda",
-
-    # XPU 特有测试
     "test_xpu",
-
-    # MPS 特有测试
     "test_mps",
-    "test_metal",
+
+    # 耗时过长（建议 Layer 4 或定时运行）
+    "test_jit",
+    "test_jit_profiling",
+
+    # 需要多卡环境
+    "distributed/test_c10d",
 ]
 ```
 
-### 8.9 测试环境变量汇总
+---
+
+## 五、Workflow 设计
+
+### 5.1 整体架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    pytorch-infra Workflow 架构                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ pr-gate.yml (主入口)                                                    │ │
+│  │                                                                         │ │
+│  │   on: pull_request, workflow_dispatch                                  │ │
+│  │                                                                         │ │
+│  │   jobs:                                                                 │ │
+│  │     ├── smoke-test         → Layer 1 (必须通过)                        │ │
+│  │     ├── device-agnostic    → Layer 2 (Smoke 通过后)                    │ │
+│  │     └── npu-specific       → Layer 3 (Device-Agnostic 通过后)          │ │
+│  │                                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ nightly-integration.yml (每日定时)                                      │ │
+│  │                                                                         │ │
+│  │   on: schedule (每日 UTC 21:00)                                        │ │
+│  │                                                                         │ │
+│  │   jobs:                                                                 │ │
+│  │     ├── full-test          → 全量测试                                   │ │
+│  │     ├── distributed-test   → 分布式测试 (Layer 4)                       │ │
+│  │     └── compatibility-report → 兼容性报告                               │ │
+│  │                                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ issue-tracker.yml (自动追踪)                                             │ │
+│  │                                                                         │ │
+│  │   on: workflow_run (completed)                                         │ │
+│  │                                                                         │ │
+│  │   jobs:                                                                 │ │
+│  │     ├── track-failure      → 创建兼容性 issue                           │ │
+│  │     └── track-success      → 关闭已修复 issue                           │ │
+│  │                                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 PR Gate Workflow
+
+```yaml
+# pytorch-infra/.github/workflows/pr-gate.yml
+
+name: torch-npu-pr-gate
+
+on:
+  repository_dispatch:
+    types: [torch-npu-pr]
+  workflow_dispatch:
+    inputs:
+      torch_npu_repo:
+        description: 'torch-npu repository'
+        required: true
+        default: 'Ascend/pytorch'
+      torch_npu_branch:
+        description: 'torch-npu branch/ref'
+        required: true
+        default: 'master'
+      torch_npu_sha:
+        description: 'torch-npu commit SHA'
+        required: true
+      pr_number:
+        description: 'PR number (for comment)'
+        required: false
+
+concurrency:
+  group: pr-gate-${{ inputs.torch_npu_sha }}
+  cancel-in-progress: true
+
+env:
+  PYTORCH_TESTING_DEVICE_ONLY_FOR: npu
+
+jobs:
+  smoke-test:
+    runs-on: [self-hosted, npu-910b]
+    timeout-minutes: 20
+    outputs:
+      pytorch_version: ${{ steps.version.outputs.pytorch_version }}
+      torch_npu_sha: ${{ inputs.torch_npu_sha }}
+      status: ${{ steps.test.outputs.status }}
+
+    steps:
+      - name: Checkout torch-npu
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.torch_npu_repo }}
+          ref: ${{ inputs.torch_npu_sha }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup NPU environment
+        shell: bash
+        run: |
+          # 检查 NPU 设备
+          npu-smi info
+
+          # 设置设备权限
+          sudo chmod 666 /dev/davinci* 2>/dev/null || true
+          sudo chmod 666 /dev/davinci_manager 2>/dev/null || true
+
+          # 设置环境变量
+          echo "ASCEND_HOME=/usr/local/Ascend" >> $GITHUB_ENV
+          source /usr/local/Ascend/bin/setenv.bash 2>/dev/null || true
+
+      - name: Install PyTorch nightly
+        id: version
+        run: |
+          pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
+          pip install numpy pyyaml
+
+          # 记录版本
+          PYTORCH_VER=$(python -c "import torch; print(torch.__version__)")
+          PYTORCH_COMMIT=$(python -c "import torch; print(torch.__git_version__)")
+
+          echo "pytorch_version=${PYTORCH_VER}" >> $GITHUB_OUTPUT
+          echo "pytorch_commit=${PYTORCH_COMMIT}" >> $GITHUB_OUTPUT
+
+          echo "### PyTorch Version Info" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| PyTorch Version | ${PYTORCH_VER} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PyTorch Commit | ${PYTORCH_COMMIT} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build torch-npu
+        run: |
+          python setup.py bdist_wheel
+          pip install dist/torch_npu*.whl
+
+      - name: Run Smoke Tests
+        id: test
+        run: |
+          python test/smoke_test.py --verbose
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Report to PR (if PR number provided)
+        if: inputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TORCH_NPU_TOKEN }}
+          script: |
+            const pr_number = '${{ inputs.pr_number }}';
+            const repo = '${{ inputs.torch_npu_repo }}';
+            const [owner, name] = repo.split('/');
+
+            const body = `## 🔥 Smoke Test Results
+
+            **Status**: ✅ Passed
+
+            | Item | Value |
+            |------|-------|
+            | PyTorch nightly | `${{ steps.version.outputs.pytorch_version }}` |
+            | torch-npu commit | `${{ inputs.torch_npu_sha }}` |
+            | Test duration | ~2-5 min |
+
+            ✅ Basic integration verified. Proceeding to full tests...`;
+
+            github.rest.issues.createComment({
+              owner: owner,
+              repo: name,
+              issue_number: parseInt(pr_number),
+              body: body
+            });
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-failure
+          path: |
+            *.log
+            test-reports/
+
+  device-agnostic-test:
+    needs: smoke-test
+    if: needs.smoke-test.outputs.status == 'success'
+    strategy:
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+      fail-fast: false
+    runs-on: [self-hosted, npu-910b]
+    timeout-minutes: 45
+    env:
+      SHARD_NUMBER: ${{ matrix.shard }}
+      NUM_TEST_SHARDS: 6
+
+    steps:
+      - name: Checkout torch-npu
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.torch_npu_repo }}
+          ref: ${{ inputs.torch_npu_sha }}
+          submodules: recursive
+
+      - name: Setup NPU environment
+        run: |
+          npu-smi info
+          sudo chmod 666 /dev/davinci* 2>/dev/null || true
+          source /usr/local/Ascend/bin/setenv.bash 2>/dev/null || true
+
+      - name: Install PyTorch nightly + torch-npu
+        run: |
+          pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
+          pip install dist/torch_npu*.whl || (python setup.py bdist_wheel && pip install dist/torch_npu*.whl)
+
+      - name: Download PyTorch test suite
+        run: |
+          git clone --depth=1 https://github.com/pytorch/pytorch.git /tmp/pytorch
+
+      - name: Run Device-Agnostic Tests (Shard ${{ matrix.shard }})
+        run: |
+          cd /tmp/pytorch
+          export PYTHONPATH="$PWD:$PYTHONPATH"
+
+          # 根据分片选择测试
+          case ${{ matrix.shard }} in
+            1|2) TESTS="test_torch" ;;
+            3|4) TESTS="test_ops" ;;
+            5)   TESTS="test_nn" ;;
+            6)   TESTS="test_autograd" ;;
+          esac
+
+          python test/run_test.py \
+            --include $TESTS \
+            --npu \
+            --shard ${{ matrix.shard }} 6
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-agnostic-shard-${{ matrix.shard }}
+          path: /tmp/pytorch/test/test-reports/
+
+  npu-specific-test:
+    needs: device-agnostic-test
+    if: success()
+    runs-on: [self-hosted, npu-910b]
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout torch-npu
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.torch_npu_repo }}
+          ref: ${{ inputs.torch_npu_sha }}
+          submodules: recursive
+
+      - name: Setup NPU and install
+        run: |
+          npu-smi info
+          source /usr/local/Ascend/bin/setenv.bash 2>/dev/null || true
+          pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
+          pip install dist/torch_npu*.whl || (python setup.py bdist_wheel && pip install dist/torch_npu*.whl)
+          pip install pytest pytest-xdist
+
+      - name: Run NPU-specific tests
+        run: |
+          pytest test/ -v \
+            --ignore=test/smoke/ \
+            --ignore=test/distributed/ \
+            -n auto \
+            --tb=short
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npu-specific-test-results
+          path: test-reports/
+
+  aggregate-results:
+    needs: [smoke-test, device-agnostic-test, npu-specific-test]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      final_status: ${{ steps.aggregate.outputs.status }}
+
+    steps:
+      - name: Aggregate results
+        id: aggregate
+        run: |
+          smoke="${{ needs.smoke-test.result }}"
+          da="${{ needs.device-agnostic-test.result }}"
+          npu="${{ needs.npu-specific-test.result }}"
+
+          if [[ "$smoke" == "success" && "$da" == "success" && "$npu" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Final PR Comment
+        if: inputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TORCH_NPU_TOKEN }}
+          script: |
+            const status = '${{ steps.aggregate.outputs.status }}';
+            const pr_number = '${{ inputs.pr_number }}';
+            const repo = '${{ inputs.torch_npu_repo }}';
+            const [owner, name] = repo.split('/');
+
+            const emoji = status === 'success' ? '✅' : '❌';
+            const body = `## ${emoji} torch-npu PR Gate Final Results
+
+            **Status**: ${status === 'success' ? 'All tests passed' : 'Some tests failed'}
+
+            | Test Layer | Status |
+            |------------|--------|
+            | Smoke Tests | ${needs.smoke-test.result === 'success' ? '✅' : '❌'} |
+            | Device-Agnostic | ${needs.device-agnostic-test.result === 'success' ? '✅' : '❌'} |
+            | NPU-Specific | ${needs.npu-specific-test.result === 'success' ? '✅' : '❌'} |
+
+            **PyTorch nightly**: `${{ needs.smoke-test.outputs.pytorch_version }}`
+            **torch-npu commit**: `${{ needs.smoke-test.outputs.torch_npu_sha }}`
+
+            ${status === 'success'
+              ? '🎉 PR is ready for merge.'
+              : '⚠️ Please check the failed test logs.'}`;
+
+            github.rest.issues.createComment({
+              owner: owner,
+              repo: name,
+              issue_number: parseInt(pr_number),
+              body: body
+            });
+
+      - name: Set GitHub Check status
+        if: inputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TORCH_NPU_TOKEN }}
+          script: |
+            const status = '${{ steps.aggregate.outputs.status }}';
+            const repo = '${{ inputs.torch_npu_repo }}';
+            const [owner, name] = repo.split('/');
+
+            // Create commit status
+            github.rest.repos.createCommitStatus({
+              owner: owner,
+              repo: name,
+              sha: '${{ inputs.torch_npu_sha }}',
+              state: status === 'success' ? 'success' : 'failure',
+              context: 'pytorch-infra/pr-gate',
+              description: status === 'success' ? 'All tests passed' : 'Tests failed',
+              target_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+            });
+```
+
+### 5.3 torch-npu PR 触发配置
+
+在 torch-npu 仓库中配置触发：
+
+```yaml
+# torch-npu/.github/workflows/trigger-integration.yml
+
+name: trigger-pytorch-infra
+
+on:
+  pull_request:
+    branches: [master, main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger pytorch-infra integration test
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PYTORCH_INFRA_TOKEN }}
+          script: |
+            github.rest.repos.createDispatchEvent({
+              owner: 'computing-infra',  // pytorch-infra 仓库 owner
+              repo: 'pytorch-infra',     // pytorch-infra 仓库名
+              event_type: 'torch-npu-pr',
+              client_payload: {
+                torch_npu_repo: '${{ github.repository }}',
+                torch_npu_branch: '${{ github.head_ref }}',
+                torch_npu_sha: '${{ github.event.pull_request.head.sha }}',
+                pr_number: '${{ github.event.pull_request.number }}'
+              }
+            });
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🔄 Integration test triggered at [pytorch-infra](https://github.com/computing-infra/pytorch-infra)
+
+              Testing torch-npu + PyTorch nightly...
+
+              Results will be posted here when complete.`
+            });
+```
+
+### 5.4 每日定时集成测试
+
+```yaml
+# pytorch-infra/.github/workflows/nightly-integration.yml
+
+name: nightly-integration
+
+on:
+  schedule:
+    - cron: '0 21 * * *'  # UTC 21:00 = 北京时间 05:00
+  workflow_dispatch:
+
+jobs:
+  get-latest-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      torch_npu_sha: ${{ steps.torch_npu.outputs.sha }}
+      pytorch_version: ${{ steps.pytorch.outputs.version }}
+
+    steps:
+      - name: Get torch-npu latest commit
+        id: torch_npu
+        run: |
+          SHA=$(curl -s "https://api.github.com/repos/Ascend/pytorch/commits/master" | jq -r '.sha')
+          echo "sha=${SHA}" >> $GITHUB_OUTPUT
+
+      - name: Get PyTorch nightly version
+        id: pytorch
+        run: |
+          VERSION=$(pip index versions torch --pre 2>/dev/null | head -1 | grep -oP '\d+\.\d+\.\d+\.dev\d+' || echo "nightly")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+  trigger-pr-gate:
+    needs: get-latest-versions
+    uses: ./.github/workflows/pr-gate.yml
+    with:
+      torch_npu_repo: 'Ascend/pytorch'
+      torch_npu_branch: 'master'
+      torch_npu_sha: ${{ needs.get-latest-versions.outputs.torch_npu_sha }}
+      pr_number: ''
+
+  create-compatibility-report:
+    needs: [get-latest-versions, trigger-pr-gate]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create compatibility report
+        run: |
+          mkdir -p reports
+          cat > reports/compatibility_report.md << EOF
+          # torch-npu + PyTorch Nightly Compatibility Report
+
+          **Date**: $(date -u +"%Y-%m-%d")
+
+          | Component | Version |
+          |-----------|---------|
+          | PyTorch nightly | ${{ needs.get-latest-versions.outputs.pytorch_version }} |
+          | torch-npu | ${{ needs.get-latest-versions.outputs.torch_npu_sha }} |
+          | Test Status | ${{ needs.trigger-pr-gate.outputs.final_status }} |
+
+          EOF
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: compatibility-report-$(date -u +"%Y-%m-%d")
+          path: reports/
+```
+
+---
+
+## 六、Issue 追踪机制
+
+### 6.1 兼容性问题追踪
+
+```yaml
+# pytorch-infra/.github/workflows/issue-tracker.yml
+
+name: issue-tracker
+
+on:
+  workflow_run:
+    workflows: ["torch-npu-pr-gate"]
+    types: [completed]
+
+jobs:
+  track-failure:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create compatibility issue in torch-npu
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TORCH_NPU_TOKEN }}
+          script: |
+            const run = context.payload.workflow_run;
+            const payload = run.inputs || {};
+
+            // 检查是否已存在相同 issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: 'Ascend',
+              repo: 'pytorch',
+              state: 'open',
+              labels: 'compatibility'
+            });
+
+            const sha_short = (payload.torch_npu_sha || run.head_sha).slice(0, 7);
+            const existing = issues.data.find(i =>
+              i.title.includes(sha_short) &&
+              i.body.includes('PyTorch nightly')
+            );
+
+            if (!existing && payload.torch_npu_sha) {
+              await github.rest.issues.create({
+                owner: 'Ascend',
+                repo: 'pytorch',
+                title: `[Compatibility] Integration test failed: ${sha_short}`,
+                body: `
+## 失败信息
+
+- **torch-npu commit**: ${payload.torch_npu_sha}
+- **PyTorch nightly**: latest
+- **Workflow run**: [View logs](https://github.com/${run.repository.full_name}/actions/runs/${run.id})
+
+## 分析建议
+
+1. 检查 PyTorch nightly API 变更
+2. 确认 torch-npu 代码是否需要适配
+3. 参考: https://github.com/pytorch/pytorch/releases
+
+## Labels
+
+请添加适当的标签: `compatibility`, `ci-failure`
+                `,
+                labels: ['compatibility', 'ci-failure']
+              });
+            }
+
+  track-success:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close fixed compatibility issues
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TORCH_NPU_TOKEN }}
+          script: |
+            const run = context.payload.workflow_run;
+            const payload = run.inputs || {};
+
+            if (!payload.torch_npu_sha) return;
+
+            const sha_short = payload.torch_npu_sha.slice(0, 7);
+
+            // 查找相关 issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: 'Ascend',
+              repo: 'pytorch',
+              state: 'open',
+              labels: 'compatibility'
+            });
+
+            for (const issue of issues.data) {
+              if (issue.title.includes(sha_short)) {
+                await github.rest.issues.update({
+                  owner: 'Ascend',
+                  repo: 'pytorch',
+                  issue_number: issue.number,
+                  state: 'closed',
+                  body: issue.body + '\n\n---\n✅ Fixed by ' + payload.torch_npu_sha
+                });
+
+                await github.rest.issues.createComment({
+                  owner: 'Ascend',
+                  repo: 'pytorch',
+                  issue_number: issue.number,
+                  body: `✅ Integration test passed. Issue closed.`
+                });
+              }
+            }
+```
+
+---
+
+## 七、Runner 环境配置
+
+### 7.1 Runner 类型
+
+| Runner 类型 | NPU 数量 | 用途 | 配置建议 |
+|------------|---------|------|---------|
+| `self-hosted, npu-910b` | 1 | PR 测试 | 910B 单卡 |
+| `self-hosted, npu-910b-4` | 4 | 分布式测试 | 910B 4卡 |
+| `self-hosted, npu-910a` | 1 | 多架构测试 | 910A 单卡 |
+
+### 7.2 Runner 环境准备
 
 ```bash
-# NPU 测试环境变量
+# Runner 主机环境配置脚本
+
+#!/bin/bash
+
+# 1. 安装 NPU 驱动和 CANN
+# 参考: https://www.hiascend.com/document
+
+# 2. 安装 Docker
+apt-get update
+apt-get install -y docker.io
+
+# 3. 配置 NPU 设备权限
+cat > /etc/rc.local << 'EOF'
+chmod 666 /dev/davinci* 2>/dev/null || true
+chmod 666 /dev/davinci_manager 2>/dev/null || true
+chmod 666 /dev/devmm_svm 2>/dev/null || true
+chmod 666 /dev/hisi_hdc 2>/dev/null || true
+EOF
+
+# 4. 安装 GitHub Actions Runner
+mkdir -p /actions-runner
+cd /actions-runner
+curl -o actions-runner-linux-x64-2.311.0.tar.gz -L \
+  https://github.com/actions/runner/releases/download/v2.311.0/actions-runner-linux-x64-2.311.0.tar.gz
+tar xzf ./actions-runner-linux-x64-*.tar.gz
+
+# 5. 配置 Runner
+./config.sh --url https://github.com/computing-infra/pytorch-infra \
+  --token <RUNNER_TOKEN> \
+  --labels npu-910b
+
+# 6. 启动 Runner
+./run.sh
+```
+
+### 7.3 华为云 CCI 方案（可选）
+
+如使用华为云 CCI (Container Instance)：
+
+```yaml
+# 使用华为云 CCI runner
+
+jobs:
+  smoke-test:
+    runs-on: cci-npu-910b  # 华为云 CCI runner label
+    container:
+      image: swr.cn-east-3.myhuaweicloud.com/ascend/pytorch:latest
+      options: --device=/dev/davinci0 --privileged
+```
+
+---
+
+## 八、实施路线图
+
+### 8.1 Phase 1: PR 集成验证（Week 1-2）
+
+```
+目标: torch-npu PR + PyTorch nightly 集成验证
+
+任务清单:
+├── 1. 配置 Runner 环境
+│   ├── 申请 NPU 资源（华为云或自托管）
+│   ├── 安装 CANN 和驱动
+│   ├── 配置 GitHub Actions Runner
+│   └── 验证 NPU 设备可用性
+│
+├── 2. 创建 pr-gate.yml
+│   ├── Smoke Test job
+│   ├── PyTorch nightly 安装流程
+│   ├── torch-npu 构建流程
+│   ├── 结果报告机制
+│
+├── 3. torch-npu 配置触发
+│   ├── 创建 trigger-integration.yml
+│   ├── 配置 repository_dispatch
+│   ├── 配置 PR comment 机制
+│
+├── 4. 编写 smoke_test.py
+│   ├── 基本导入验证
+│   ├── NPU 设备检测
+│   ├── 张量操作验证
+│   ├── API 对齐检查
+│
+└── 5. 验证整体流程
+    ├── 提交测试 PR
+    ├── 检查触发流程
+    ├── 验证结果报告
+    └── 调整超时和配置
+
+验收标准:
+✅ torch-npu PR 能自动触发测试
+✅ 15 分钟内完成 Smoke 测试
+✅ 结果正确报告到 PR comment
+✅ GitHub Check 状态正确设置
+```
+
+### 8.2 Phase 2: 设备无关测试（Week 3-4）
+
+```
+目标: 扩展到 PyTorch 设备无关测试
+
+任务清单:
+├── 1. 扩展 pr-gate.yml
+│   ├── 添加 device-agnostic-test job
+│   ├── 配置测试分片
+│   ├── 复用 PyTorch test/run_test.py
+│
+├── 2. 配置 NPU 测试基类
+│   ├── NPUTestBase 实现
+│   ├── 环境变量设置
+│   ├── Blocklist 配置
+│
+├── 3. 优化测试效率
+│   ├── 并行分片执行
+│   ├── 测试缓存策略
+│   ├── 失败重试机制
+│
+└── 4. 结果聚合
+    ├── 多分片结果合并
+    ├── 统计报告生成
+    ├── PR 状态更新
+
+验收标准:
+✅ 6 分片并行执行
+✅ 30 分钟内完成设备无关测试
+✅ PyTorch 核心测试通过率 > 90%
+```
+
+### 8.3 Phase 3: NPU 专用测试（Week 5-6）
+
+```
+目标: 完整 torch-npu 测试覆盖
+
+任务清单:
+├── 1. 添加 npu-specific-test job
+│   ├── torch-npu 测试集成
+│   ├── pytest 并行配置
+│   ├── 测试分类整理
+│
+├── 2. 每日定时测试
+│   ├── nightly-integration.yml
+│   ├── 兼容性报告生成
+│   ├── 结果历史追踪
+│
+└── 3. Issue 追踪
+    ├── issue-tracker.yml
+    ├── 失败自动创建 issue
+    ├── 修复自动关闭 issue
+
+验收标准:
+✅ torch-npu 专用测试全部通过
+✅ 每日定时测试运行
+✅ Issue 自动追踪机制运行
+```
+
+### 8.4 Phase 4: 扩展测试（Week 7+）
+
+```
+目标: 分布式测试和性能基准
+
+任务清单:
+├── 1. 分布式测试
+│   ├── 多卡 runner 配置
+│   ├── HCCL 测试集成
+│   ├── distributed job
+│
+├── 2. Inductor 测试
+│   ├── Triton-NPU 支持
+│   ├── 编译器测试
+│   ├── 性能基准
+│
+└── 3. 多架构支持
+    ├── 910A runner
+    ├── 310P runner
+    ├── 架构矩阵测试
+
+验收标准:
+✅ 分布式测试每日运行
+✅ Inductor 测试集成完成
+✅ 多架构测试支持
+```
+
+---
+
+## 九、附录
+
+### 9.1 环境变量汇总
+
+```bash
+# torch-npu + PyTorch 集成测试环境变量
 
 # 设备类型
 export PYTORCH_TESTING_DEVICE_ONLY_FOR="npu"
-
-# 测试配置
-export TEST_CONFIG="default"  # 或 "distributed", "slow", "smoke_npu"
-
-# 构建环境
-export BUILD_ENVIRONMENT="linux-noble-npu-cann8.1-py3.10-910b"
-
-# NPU 架构
-export NPU_ARCH="Ascend910B"
 
 # CANN 路径
 export ASCEND_HOME=/usr/local/Ascend
 export ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit
 
-# HCCL 配置 (分布式测试)
-export HCCL_CONNECT_TIMEOUT=7200
-export HCCL_EXEC_TIMEOUT=0
+# 测试配置
+export SHARD_NUMBER=1
+export NUM_TEST_SHARDS=6
+
+# NPU 架构
+export NPU_ARCH="Ascend910B"
 ```
 
-### 8.10 与其他设备测试对比
-
-| 特性 | CUDA | ROCm | XPU | **NPU** |
-|------|------|------|-----|---------|
-| Smoke 测试 | ✅ H100/B200 | ✅ MI300 | ✅ Client | ✅ 910B |
-| Default 测试 | ✅ 5-6分片 | ✅ 6分片 | ✅ 6-12分片 | ✅ 6分片 |
-| Distributed 测试 | ✅ H100×8 | ✅ MI300×4 | ❌ | ✅ 910B×4 |
-| Inductor 测试 | ✅ | ✅ | ✅ | ✅ |
-| 性能基准测试 | ✅ H100/B200 | ✅ MI300 | ✅ | ✅ 910B |
-| Slow 测试 | ✅ | ✅ | ❌ | ✅ |
-
-### 8.11 测试实施建议
-
-1. **阶段一：Smoke 测试** - 优先实现 `test_transformers` 等核心测试
-2. **阶段二：Default 测试** - 逐步覆盖所有设备无关测试
-3. **阶段三：分布式测试** - 实现 HCCL 分布式通信测试
-4. **阶段四：性能测试** - 实现 Inductor 性能基准测试
-5. **持续完善** - 根据测试结果调整 blocklist
-
----
-
-## 九、扩展机制
-
-### 9.1 添加新设备类型
-
-参考 PyTorch 官方文档 [Note: How to extend DeviceTypeTestBase](https://github.com/pytorch/pytorch/blob/main/torch/testing/_internal/common_device_type.py#L798)：
-
-```python
-# 在 Ascend/pytorch 中创建 NPU 测试基类
-
-# 文件: torch_npu/testing/_internal/npu_test_base.py
-
-from torch.testing._internal.common_device_type import DeviceTypeTestBase
-
-class NPUTestBase(DeviceTypeTestBase):
-    device_type = "npu"
-
-    @classmethod
-    def setUpClass(cls):
-        # 初始化 NPU 环境
-        pass
-
-# 设置环境变量启用
-# export TORCH_TEST_DEVICES=/path/to/npu_test_base.py
-```
-
-### 9.2 注册测试设备
-
-```python
-# 在 Ascend/pytorch 初始化时注册
-
-import torch
-
-# 注册 NPU 模块
-torch._register_device_module('npu', torch_npu.npu)
-
-# 设置 PrivateUse1 后端 (可选)
-torch._C._set_privateuse1_backend_name("npu")
-```
-
----
-
-## 十、PyTorch 官方镜像制作详解
-
-### 10.1 build.sh 核心逻辑
-
-PyTorch 镜像构建入口脚本 `.ci/docker/build.sh` 的核心逻辑：
+### 9.2 PyTorch nightly 版本获取
 
 ```bash
-#!/bin/bash
-# 镜像构建三步流程：
-# 1. 根据镜像名称提取参数
-# 2. 运行 docker build
-# 3. 验证安装的软件版本
+# 方式 1: pip 安装 nightly
+pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
 
-# Dockerfile 选择逻辑
-if [[ "$image" == *rocm* ]]; then
-  DOCKERFILE="${OS}-rocm/Dockerfile"
-elif [[ "$image" == *xpu* ]]; then
-  DOCKERFILE="${OS}-xpu/Dockerfile"
-elif [[ "$image" == *riscv* ]]; then
-  DOCKERFILE="ubuntu-cross-riscv/Dockerfile"
-else
-  DOCKERFILE="${OS}/Dockerfile"  # CUDA 或 CPU
-fi
+# 方式 2: 指定版本
+pip install torch==2.7.0.dev20250330 --index-url https://download.pytorch.org/whl/nightly/cpu
 
-# 核心配置示例 (XPU)
-case "$tag" in
-  pytorch-linux-noble-xpu-n-py3)
-    ANACONDA_PYTHON_VERSION=3.10
-    GCC_VERSION=13
-    VISION=yes
-    XPU_VERSION=2025.3
-    XPU_DRIVER_TYPE=LTS
-    NINJA_VERSION=1.9.0
-    TRITON=yes
-    ;;
-esac
-
-# Docker build 命令
-docker buildx build \
-  --build-arg "BUILD_ENVIRONMENT=${image}" \
-  --build-arg "ANACONDA_PYTHON_VERSION=${ANACONDA_PYTHON_VERSION}" \
-  --build-arg "GCC_VERSION=${GCC_VERSION}" \
-  --build-arg "XPU_VERSION=${XPU_VERSION}" \
-  --build-arg "XPU_DRIVER_TYPE=${XPU_DRIVER_TYPE}" \
-  --build-arg "NPU_ARCH=${NPU_ARCH}" \
-  -f "${DOCKERFILE}" \
-  -t "$tmp_tag" .
+# 方式 3: 从源码构建（备用）
+git clone --depth=1 --branch=main https://github.com/pytorch/pytorch.git
+cd pytorch && python setup.py install
 ```
 
-### 10.2 Dockerfile 层级设计原则
-
-参考 XPU Dockerfile 的层级设计：
-
-```dockerfile
-# 第一层：基础依赖（可缓存）
-COPY ./common/install_base.sh install_base.sh
-RUN bash ./install_base.sh && rm install_base.sh
-
-# 第二层：用户和权限
-COPY ./common/install_user.sh install_user.sh
-RUN bash ./install_user.sh && rm install_user.sh
-
-# 第三层：语言环境（Python/Conda）
-COPY ./common/install_conda.sh install_conda.sh
-RUN bash ./install_conda.sh && rm install_conda.sh
-
-# 第四层：编译工具（GCC/Clang）
-COPY ./common/install_gcc.sh install_gcc.sh
-RUN bash ./install_gcc.sh && rm install_gcc.sh
-
-# 第五层：设备特定组件（XPU/ROCm/NPU）
-COPY ./common/install_xpu.sh install_xpu.sh
-RUN bash ./install_xpu.sh && rm install_xpu.sh
-
-# 第六层：可选组件（Triton/Vision/Benchmarks）
-ARG TRITON
-COPY ./common/install_triton.sh install_triton.sh
-RUN if [ -n "${TRITON}" ]; then bash ./install_triton.sh; fi
-
-# 第七层：缓存工具（最后安装，优先PATH）
-COPY ./common/install_cache.sh install_cache.sh
-ENV PATH /opt/cache/bin:$PATH
-RUN bash ./install_cache.sh && rm install_cache.sh
-```
-
-### 10.3 安装脚本设计模式
-
-#### 10.3.1 通用结构
-
-```bash
-#!/bin/bash
-set -xe
-
-# 版本映射
-declare -A VERSION_MAP=(
-    ["8.0"]="8.0.RC1"
-    ["8.1"]="8.1.0"
-)
-
-# 按操作系统分发
-function install_ubuntu() {
-    . /etc/os-release
-    # Ubuntu 特定安装逻辑
-}
-
-function install_rhel() {
-    # RHEL/AlmaLinux 特定安装逻辑
-}
-
-# 主入口
-ID=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
-case "$ID" in
-    ubuntu) install_ubuntu ;;
-    rhel|almalinux) install_rhel ;;
-    *) echo "Unsupported OS: $ID"; exit 1 ;;
-esac
-```
-
-#### 10.3.2 XPU install_xpu.sh 关键实现
-
-```bash
-#!/bin/bash
-set -xe
-
-function install_ubuntu() {
-    . /etc/os-release
-
-    # Driver 类型选择
-    if [[ "${XPU_DRIVER_TYPE,,}" == "client" ]]; then
-        # Client driver - 从 PPA 安装
-        add-apt-repository -y ppa:kobuk-team/intel-graphics
-        apt-get install -y xpu-smi intel-opencl-icd libze-dev intel-ocloc
-    else
-        # LTS driver - 从 Intel 官方仓库安装
-        wget -qO - https://repositories.intel.com/gpu/intel-graphics.key \
-            | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg
-        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] \
-            https://repositories.intel.com/gpu/ubuntu ${VERSION_CODENAME}${XPU_DRIVER_VERSION} unified" \
-            | tee /etc/apt/sources.list.d/intel-gpu.list
-        apt-get update
-        apt-get install -y xpu-smi intel-opencl-icd libze-dev intel-ocloc
-    fi
-}
-
-# Driver 版本选择
-XPU_DRIVER_VERSION=""
-if [[ "${XPU_DRIVER_TYPE,,}" == "lts" ]]; then
-    XPU_DRIVER_VERSION="/lts/2523"
-fi
-
-# oneAPI 版本选择
-if [[ "$XPU_VERSION" == "2025.3" ]]; then
-    XPU_PACKAGES_URL="https://.../intel-deep-learning-essentials-2025.3_offline.sh"
-else
-    XPU_PACKAGES_URL="https://.../intel-deep-learning-essentials-2025.2_offline.sh"
-fi
-```
-
-### 10.4 版本 Pin 管理
-
-```
-.ci/docker/ci_commit_pins/
-├── nccl.txt              # NCCL commit SHA
-├── triton.txt            # Triton commit SHA
-├── triton-xpu.txt        # Triton-XPU commit SHA
-├── rocm-composable-kernel.txt  # ROCm CK commit SHA
-├── huggingface-requirements.txt  # HF 依赖版本
-├── timm.txt              # TIMM 版本
-└── torchbench.txt        # TorchBench 版本
-```
-
-Pin 文件格式示例：
-```
-# triton.txt - commit SHA
-7e48d5dfc3e30520da69a9cc41c6d00b566451e0
-```
-
----
-
-## 十一、PyTorch 官方门禁方案详解
-
-### 11.1 门禁架构总览
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        PyTorch CI 门禁架构                                    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌─────────────┐                                                            │
-│  │ PR/Push     │                                                            │
-│  │ 触发        │                                                            │
-│  └──────┬──────┘                                                            │
-│         │                                                                   │
-│         ▼                                                                   │
-│  ┌─────────────────────────────────────────────────────────────────┐       │
-│  │              _runner-determinator.yml                           │       │
-│  │  ┌─────────────────────────────────────────────────────────┐   │       │
-│  │  │  runner_determinator.py                                  │   │       │
-│  │  │  - 读取 GitHub Issue #5132 配置                          │   │       │
-│  │  │  - 检查用户 opt-in/opt-out                               │   │       │
-│  │  │  - 按 rollout percentage 随机分配                        │   │       │
-│  │  │  - 输出: label-type, use-arc                            │   │       │
-│  │  └─────────────────────────────────────────────────────────┘   │       │
-│  └─────────────────────────────────────────────────────────────────┘       │
-│         │                                                                   │
-│         ▼                                                                   │
-│  ┌─────────────────────────────────────────────────────────────────┐       │
-│  │              主 Workflow (如 rocm-mi300.yml)                     │       │
-│  │  ┌─────────────────────────────────────────────────────────┐   │       │
-│  │  │  get-label-type: 获取 runner 类型                        │   │       │
-│  │  │  build: 使用 _linux-build.yml 构建                       │   │       │
-│  │  │  test: 使用 _rocm-test.yml 测试                          │   │       │
-│  │  └─────────────────────────────────────────────────────────┘   │       │
-│  └─────────────────────────────────────────────────────────────────┘       │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### 11.2 Runner Determinator 详解
-
-#### 11.2.1 配置来源
-
-配置存储在 GitHub Issue: `pytorch/test-infra#5132`
-
-```yaml
-# Issue Body 格式
-experiments:
-  lf:
-    rollout_percent: 25    # 25% 流量使用 LF runner
-    all_branches: false    # main/release 分支除外
-    default: true
-  arc:
-    rollout_percent: 10
-    all_branches: false
-    default: false
----
-
-# 用户 opt-in 列表
-@User1,lf              # User1 加入 LF 实验
-@User2,-lf,split_build # User2 退出 LF，加入 split_build
-@User3                  # User3 无实验
-```
-
-#### 11.2.2 核心判断逻辑
-
-```python
-# runner_determinator.py 核心逻辑
-
-def get_runner_prefix(rollout_state, workflow_requestors, branch, ...):
-    settings = parse_settings(rollout_state)
-    user_optins = parse_users(rollout_state)
-
-    for experiment_name, experiment_settings in settings.experiments.items():
-        # 1. 检查例外分支
-        if not experiment_settings.all_branches and is_exception_branch(branch):
-            continue  # main/release/nightly/landchecks 分支不参与实验
-
-        # 2. 检查用户 opt-out
-        if is_user_opted_out(user, user_optins, experiment_name):
-            continue
-
-        # 3. 检查用户 opt-in
-        if is_user_opted_in(user, user_optins, experiment_name):
-            enabled = True
-
-        # 4. 按比例随机启用
-        elif random.uniform(0, 100) <= experiment_settings.rollout_perc:
-            enabled = True
-
-        # 5. 设置 runner 前缀
-        if enabled:
-            if experiment_name == "lf":
-                prefix = "lf."    # Linux Foundation runner
-            elif experiment_name == "arc":
-                prefix = "mt-"    # ARC runner
-
-    return prefix
-
-def is_exception_branch(branch: str) -> bool:
-    return branch.split("/", maxsplit=1)[0] in {
-        "main", "nightly", "release", "landchecks"
-    }
-```
-
-#### 11.2.3 Runner 类型对照
-
-| label-type | Runner 类型 | 说明 |
-|------------|-----------|------|
-| `""` | Meta Runner | 默认 Meta 内部 runner |
-| `"lf."` | LF Runner | Linux Foundation runner |
-| `"lf.c."` | LF Canary Runner | LF 金丝雀 runner |
-| `"mt-"` | ARC Runner | OSDC ARC runner |
-| `"c-mt-"` | ARC Canary Runner | ARC 金丝雀 runner |
-
-### 11.3 主 Workflow 结构
-
-#### 11.3.1 ROCm MI300 Workflow 示例
-
-```yaml
-# .github/workflows/rocm-mi300.yml
-
-name: rocm-mi300
-
-on:
-  push:
-    tags:
-      - ciflow/rocm-mi300/*
-  workflow_dispatch:
-  schedule:
-    - cron: 0 0,3,6,9,12,15,18,21 * * *  # 每3小时
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}-${{ github.ref_type == 'branch' && github.sha }}-${{ github.event_name == 'workflow_dispatch' }}-${{ github.event_name == 'schedule' }}
-  cancel-in-progress: true
-
-jobs:
-  # 1. 获取 Runner 类型
-  get-label-type:
-    uses: pytorch/pytorch/.github/workflows/_runner-determinator.yml@main
-    with:
-      triggering_actor: ${{ github.triggering_actor }}
-      issue_owner: ${{ github.event.pull_request.user.login }}
-      curr_branch: ${{ github.head_ref || github.ref_name }}
-      curr_ref_type: ${{ github.ref_type }}
-
-  # 2. 构建
-  linux-noble-rocm-py3_12-build:
-    uses: ./.github/workflows/_linux-build.yml
-    needs: get-label-type
-    with:
-      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
-      build-environment: linux-noble-rocm-py3.12-mi300
-      docker-image-name: ci-image:pytorch-linux-noble-rocm-n-py3
-      test-matrix: |
-        { include: [
-          { config: "default", shard: 1, num_shards: 6, runner: "linux.rocm.gpu.gfx942.1" },
-          ...
-        ]}
-    secrets: inherit
-
-  # 3. 测试
-  linux-noble-rocm-py3_12-test:
-    uses: ./.github/workflows/_rocm-test.yml
-    needs: linux-noble-rocm-py3_12-build
-    with:
-      build-environment: ${{ needs.linux-noble-rocm-py3_12-build.outputs.build-environment }}
-      docker-image: ${{ needs.linux-noble-rocm-py3_12-build.outputs.docker-image }}
-      test-matrix: ${{ needs.linux-noble-rocm-py3_12-build.outputs.test-matrix }}
-    secrets: inherit
-```
-
-#### 11.3.2 XPU Workflow 示例
-
-```yaml
-# .github/workflows/xpu.yml
-
-name: xpu
-
-on:
-  push:
-    tags:
-      - ciflow/xpu/*
-  workflow_dispatch:
-  schedule:
-    - cron: 45 0,8,16 * * 1-5   # 工作日3次
-    - cron: 45 4 * * 0,6        # 周末1次
-
-jobs:
-  # 构建 + 测试 (LTS driver)
-  linux-noble-xpu-n-py3_10-build:
-    uses: ./.github/workflows/_linux-build.yml
-    needs: get-label-type
-    with:
-      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
-      build-environment: linux-noble-xpu-n-py3.10
-      docker-image-name: ci-image:pytorch-linux-noble-xpu-n-py3
-      test-matrix: |
-        { include: [
-          { config: "default", shard: 1, num_shards: 12, runner: "linux.idc.xpu" },
-          ...
-        ]}
-    secrets: inherit
-
-  # Client 测试 (Client driver)
-  linux-noble-xpu-n-py3_10-client-build:
-    uses: ./.github/workflows/_linux-build.yml
-    needs: get-label-type
-    with:
-      build-environment: linux-noble-xpu-n-py3.10-client
-      docker-image-name: ci-image:pytorch-linux-noble-xpu-n-py3-client
-      test-matrix: |
-        { include: [
-          { config: "smoke_xpu", shard: 1, num_shards: 1, runner: "linux.client.xpu" },
-        ]}
-    secrets: inherit
-```
-
-### 11.4 测试 Workflow (_rocm-test.yml / _xpu-test.yml)
-
-#### 11.4.1 测试流程
-
-```yaml
-jobs:
-  test:
-    strategy:
-      matrix: ${{ fromJSON(inputs.test-matrix) }}
-      fail-fast: false
-    runs-on: ${{ matrix.runner }}
-    steps:
-      # 1. 检出代码
-      - name: Checkout PyTorch
-        uses: pytorch/pytorch/.github/actions/checkout-pytorch@main
-
-      # 2. 设置设备环境
-      - name: Setup XPU
-        uses: ./.github/actions/setup-xpu
-
-      # 3. 检查 GPU 数量 (分布式任务)
-      - name: Runner check GPU count
-        if: ${{ contains(matrix.config, 'distributed') }}
-        run: |
-          ngpu=$(xpu-smi discovery | grep -c 'Device Name')
-          if [[ $ngpu -lt 2 ]]; then
-            echo "Error: at least 2 GPUs needed for distributed jobs"
-            exit 1
-          fi
-
-      # 4. 拉取 Docker 镜像
-      - name: Pull docker image
-        uses: pytorch/test-infra/.github/actions/pull-docker-image@main
-
-      # 5. 下载构建产物
-      - name: Download build artifacts
-        uses: ./.github/actions/download-build-artifacts
-
-      # 6. 执行测试
-      - name: Test
-        env:
-          BUILD_ENVIRONMENT: ${{ inputs.build-environment }}
-          TEST_CONFIG: ${{ matrix.config }}
-          SHARD_NUMBER: ${{ matrix.shard }}
-          NUM_TEST_SHARDS: ${{ matrix.num_shards }}
-        run: |
-          container_name=$(docker run \
-            --device=/dev/dri \
-            --group-add video \
-            --shm-size="8g" \
-            --privileged \
-            -v "${GITHUB_WORKSPACE}:/var/lib/jenkins/workspace" \
-            "${DOCKER_IMAGE}")
-
-          docker exec -t "${container_name}" sh -c \
-            "cd .. && cp -R workspace pytorch && cd pytorch && pip install dist/*.whl && .ci/pytorch/test.sh"
-
-      # 7. 上传测试结果
-      - name: Upload test artifacts
-        uses: ./.github/actions/upload-test-artifacts
-
-      # 8. 清理环境
-      - name: Teardown XPU
-        uses: ./.github/actions/teardown-xpu
-```
-
-### 11.5 Setup Action 设计
-
-#### 11.5.1 setup-xpu/action.yml
-
-```yaml
-name: Setup XPU host
-
-runs:
-  using: composite
-  steps:
-    # 1. 健康检查 - 系统信息
-    - name: Runner health check system info
-      shell: bash
-      run: |
-        cat /etc/os-release || true
-        whoami
-
-    # 2. 健康检查 - GPU 检测
-    - name: Runner health check xpu-smi
-      shell: bash
-      run: |
-        timeout 30 xpu-smi discovery || true
-
-    # 3. 健康检查 - GPU 数量
-    - name: Runner health check GPU count
-      shell: bash
-      run: |
-        ngpu=$(timeout 30 xpu-smi discovery | grep -c 'Device Name' || true)
-        if [[ $ngpu -eq 0 ]]; then
-          echo "Error: Failed to detect any GPUs"
-          exit 1
-        fi
-
-    # 4. 磁盘空间检查
-    - name: Runner diskspace health check
-      uses: pytorch/pytorch/.github/actions/diskspace-cleanup@main
-
-    # 5. 设置环境变量
-    - name: Setup useful environment variables
-      shell: bash
-      run: |
-        RUNNER_ARTIFACT_DIR="${RUNNER_TEMP}/artifacts"
-        mkdir -p "${RUNNER_ARTIFACT_DIR}"
-        echo "RUNNER_ARTIFACT_DIR=${RUNNER_ARTIFACT_DIR}" >> "${GITHUB_ENV}"
-
-    # 6. 设置 GPU_FLAG (Docker 设备映射)
-    - name: XPU set GPU_FLAG
-      shell: bash
-      run: |
-        render_gid=$(cat /etc/group | grep render | cut -d: -f3)
-        echo "GPU_FLAG=--device=/dev/mem --device=/dev/dri --group-add video --group-add $render_gid" >> "${GITHUB_ENV}"
-
-    # 7. ECR 登录
-    - name: Login to ECR
-      uses: pytorch/pytorch/.github/actions/ecr-login@main
-```
-
-### 11.6 Docker 镜像构建 Workflow
-
-```yaml
-# .github/workflows/docker-builds.yml
-
-name: docker-builds
-
-on:
-  workflow_dispatch:
-  pull_request:
-    paths:
-      - .ci/docker/**
-  push:
-    branches: [main, release/*]
-  schedule:
-    - cron: 1 3 * * 3  # 每周三
-
-jobs:
-  docker-build:
-    strategy:
-      matrix:
-        docker-image-name: [
-          pytorch-linux-jammy-cuda12.8-cudnn9-py3-gcc11,
-          pytorch-linux-noble-rocm-n-py3,
-          pytorch-linux-noble-xpu-n-py3,
-          # ... 更多镜像
-        ]
-    runs-on: linux.12xlarge
-    steps:
-      - name: Checkout PyTorch
-        uses: pytorch/pytorch/.github/actions/checkout-pytorch@main
-
-      - name: Login to ECR
-        uses: ./.github/actions/ecr-login
-
-      - name: Build docker image
-        uses: pytorch/test-infra/.github/actions/calculate-docker-image@main
-        with:
-          docker-image-name: ci-image:${{ matrix.docker-image-name }}
-          always-rebuild: true
-          push: true
-
-      - name: Push to ghcr.io
-        if: github.event_name == 'push'
-        run: |
-          ghcr_image="ghcr.io/pytorch/ci-image"
-          docker tag "${ECR_DOCKER_IMAGE}" "${ghcr_image}:${tag}"
-          docker push "${ghcr_image}:${tag}"
-```
-
-### 11.7 门禁触发条件设计
-
-| Workflow | 触发条件 | 说明 |
-|----------|---------|------|
-| `rocm-mi300.yml` | 每3小时 | 高频回归测试 |
-| `rocm-mi355.yml` | 每日 | 新硬件测试 |
-| `xpu.yml` | 工作日3次/周末1次 | 定期测试 |
-| `slow-rocm-mi200.yml` | 手动/tag | 慢速测试 |
-| `inductor-perf-*.yml` | 每日 | 性能基准 |
-
-### 11.8 NPU 门禁建议配置
-
-#### 11.8.1 触发条件
-
-```yaml
-on:
-  push:
-    branches: [main, release/*]
-    tags:
-      - ciflow/npu/*
-      - ciflow/npu-910b/*
-  workflow_dispatch:
-  schedule:
-    # 910B: 每6小时运行
-    - cron: 0 0,6,12,18 * * *
-    # 310P: 每日运行
-    - cron: 0 2 * * *
-```
-
-#### 11.8.2 Runner 配置
-
-```yaml
-jobs:
-  get-label-type:
-    uses: pytorch/pytorch/.github/workflows/_runner-determinator.yml@main
-    with:
-      triggering_actor: ${{ github.triggering_actor }}
-      issue_owner: ${{ github.event.pull_request.user.login }}
-      curr_branch: ${{ github.head_ref || github.ref_name }}
-      curr_ref_type: ${{ github.ref_type }}
-
-  linux-noble-npu-910b-build:
-    uses: ./.github/workflows/_linux-build.yml
-    needs: get-label-type
-    with:
-      runner_prefix: "${{ needs.get-label-type.outputs.label-type }}"
-      build-environment: linux-noble-npu-cann8.1-py3.10-910b
-      docker-image-name: ci-image:pytorch-linux-noble-npu-cann8.1-py3.10-gcc13
-      test-matrix: |
-        { include: [
-          { config: "default", shard: 1, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-          { config: "default", shard: 2, num_shards: 6, runner: "linux.npu.gpu.910b.1" },
-          ...
-        ]}
-    secrets: inherit
-```
-
----
-
-## 十二、Docker 容器设备映射
-
-### 12.1 GPU 设备映射参数
-
-```bash
-# ROCm 容器设备映射
-docker run \
-  --device=/dev/mem \
-  --device=/dev/kfd \           # AMD KFD
-  --device=/dev/dri \           # DRI 设备
-  --group-add video \
-  --group-add render \
-  --group-add daemon \
-  --cap-add=SYS_PTRACE \
-  --security-opt seccomp=unconfined \
-  --shm-size="8g" \
-  "${DOCKER_IMAGE}"
-
-# XPU 容器设备映射
-docker run \
-  --device=/dev/mem \
-  --device=/dev/dri \
-  --group-add video \
-  --group-add render \
-  --privileged \
-  --shm-size="8g" \
-  "${DOCKER_IMAGE}"
-
-# NPU 容器设备映射 (建议)
-docker run \
-  --device=/dev/davinci0 \           # NPU 设备
-  --device=/dev/davinci1 \
-  --device=/dev/davinci_manager \    # 管理设备
-  --device=/dev/devmm_svm \          # SVM 设备
-  --device=/dev/hisi_hdc \           # HDC 设备
-  --group-add HwHiAiUser \
-  --privileged \
-  --shm-size="8g" \
-  "${DOCKER_IMAGE}"
-```
-
-### 12.2 环境变量传递
-
-```bash
-# 容器启动时传递的环境变量
-docker run \
-  -e BUILD_ENVIRONMENT \
-  -e PR_NUMBER \
-  -e GITHUB_ACTIONS \
-  -e SHARD_NUMBER \
-  -e TEST_CONFIG \
-  -e NUM_TEST_SHARDS \
-  -e HUGGING_FACE_HUB_TOKEN \
-  -e ZE_AFFINITY_MASK \        # XPU 设备亲和性
-  -e HIP_VISIBLE_DEVICES \     # ROCm 设备可见性
-  -e ASCEND_DEVICE_ID \        # NPU 设备 ID (建议)
-  "${DOCKER_IMAGE}"
-```
-
----
-
-## 十三、参考实现对比
-
-### 13.1 CUDA vs ROCm vs XPU vs NPU
-
-| 特性 | CUDA | ROCm | XPU | **NPU (建议)** |
-|------|------|------|-----|----------------|
-| SDK 安装脚本 | `install_cuda.sh` | `install_rocm.sh` | `install_xpu.sh` | `install_npu.sh` |
-| Dockerfile 路径 | `ubuntu/Dockerfile` | `ubuntu-rocm/Dockerfile` | `ubuntu-xpu/Dockerfile` | `ubuntu-npu/Dockerfile` |
-| 测试 Workflow | `_linux-test.yml` | `_rocm-test.yml` | `_xpu-test.yml` | `_npu-test.yml` |
-| Setup Action | - | `setup-rocm` | `setup-xpu` | `setup-npu` |
-| 设备检测命令 | `nvidia-smi` | `rocm-smi` / `rocminfo` | `xpu-smi` | `npu-smi` |
-| 环境变量 | `CUDA_VERSION` | `ROCM_VERSION` | `XPU_VERSION` | `NPU_VERSION` |
-| 架构变量 | `TORCH_CUDA_ARCH_LIST` | `PYTORCH_ROCM_ARCH` | - | `NPU_ARCH` |
-| 通信库 | NCCL | RCCL | - | HCCL |
-| 计算库 | cuDNN | MIOpen | oneDNN | ACL |
-
-### 13.2 Workflow 复杂度对比
-
-| Workflow | Job 数 | 测试分片 | 触发频率 |
-|----------|-------|---------|---------|
-| `trunk.yml` (CUDA) | 20+ | 5-6 | 每次提交 |
-| `rocm-mi300.yml` | 3 | 6 | 每3小时 |
-| `xpu.yml` | 5 | 6-12 | 每日3次 |
-| **`npu-910b.yml` (建议)** | 3 | 6 | 每6小时 |
+### 9.3 与其他设备测试对比
+
+| 特性 | CUDA (主仓) | ROCm (主仓) | XPU (主仓) | **NPU (中间CI)** |
+|------|------------|------------|-----------|------------------|
+| 代码位置 | PyTorch 主仓 | PyTorch 主仓 | PyTorch 主仓 | torch-npu 独立仓库 |
+| 触发方式 | PR + 定时 | 定时 + tag | 定时 + tag | **PR + 定时** |
+| PyTorch 版本 | 主仓代码 | 主仓代码 | 主仓代码 | **nightly wheel** |
+| Smoke 测试 | test_cuda | test_transformers | smoke_xpu | **smoke_test.py** |
+| 设备无关测试 | trunk.yml 分片 | 6 分片 | 6-12 分片 | **6 分片** |
+| 反馈方式 | GitHub Check | PR label | PR label | **PR Comment + Check** |
+
+### 9.4 常见问题处理
+
+| 问题 | 解决方案 |
+|------|---------|
+| PyTorch nightly API 变更导致失败 | 1. 检查变更内容<br>2. 适配 torch-npu 代码<br>3. 更新测试 |
+| NPU 设备不可用 | 1. 检查驱动状态<br>2. 检查设备权限<br>3. 检查 CANN 环境 |
+| 构建超时 | 1. 使用预构建 wheel<br>2. 配置 ccache<br>3. 减少编译范围 |
+| 测试不稳定 | 1. 标记 flaky test<br>2. 配置重试策略<br>3. 独立追踪 |
+
+### 9.5 参考资料
+
+- PyTorch 官方 CI: https://github.com/pytorch/pytorch/tree/main/.github/workflows
+- ROCm 门禁: `rocm-mi300.yml`, `_rocm-test.yml`
+- XPU 门禁: `xpu.yml`, `_xpu-test.yml`
+- PrivateUse1 机制: `torch/testing/_internal/common_device_type.py`
+- CANN 文档: https://www.hiascend.com/document
+- torch-npu 仓库: https://gitcode.com/Ascend/pytorch
