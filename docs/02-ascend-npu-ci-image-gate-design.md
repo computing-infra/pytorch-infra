@@ -492,12 +492,88 @@ WORKDIR /home/runner/work
 
 ### 2.5 镜像仓库管理
 
-#### 2.5.1 华为云 SWR 配置
+#### 2.5.1 多仓库架构
+
+采用三镜像仓库架构，兼顾全球分发、国内访问和企业生态集成：
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         镜像仓库架构                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                     构建源头：GitHub Actions                            │ │
+│  │                                                                         │ │
+│  │  镜像构建完成后，同步推送到三个仓库：                                       │ │
+│  │                                                                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  ──────────────────────────────────────────────────────────────────────── │
+│                                                                             │
+│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐          │
+│  │  GitHub ghcr    │   │  Red Hat quay   │   │  华为云 SWR     │          │
+│  │                 │   │                 │   │                 │          │
+│  │  全球可访问     │   │  企业级稳定     │   │  国内极速访问   │          │
+│  │  CI 集成友好    │   │  开源社区友好   │   │  NPU 生态集成   │          │
+│  │  免费（公开）   │   │  免费（公开）   │   │  IAM 认证       │          │
+│  │                 │   │                 │   │                 │          │
+│  │  用途：         │   │  用途：         │   │  用途：         │          │
+│  │  - CI Runner   │   │  - 公开分发     │   │  - 生产环境     │          │
+│  │  - 开发测试    │   │  - 社区用户     │   │  - NPU Runner   │          │
+│  └─────────────────┘   └─────────────────┘   └─────────────────┘          │
+│                                                                             │
+│  仓库地址：                                                                  │
+│  ─────────                                                                  │
+│  ghcr.io/computing-infra/ascend-ci                                         │
+│  quay.io/ascendpytorch/ascend-ci                                           │
+│  swr.cn-east-3.myhuaweicloud.com/ascend-ci                                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 2.5.2 仓库配置详情
 
 ```yaml
 # 镜像仓库配置
-registry:
-  primary:
+registries:
+  # GitHub Container Registry (ghcr)
+  ghcr:
+    name: "GitHub Container Registry"
+    url: "ghcr.io"
+    namespace: "computing-infra/ascend-ci"
+    auth:
+      type: "github_token"
+      # 使用 GITHUB_TOKEN 或 PAT，自动集成 GitHub Actions
+      # 公开镜像免费存储，私有镜像有存储限制
+    features:
+      - "与 GitHub Actions 无缝集成"
+      - "支持 Package 安全扫描"
+      - "全球 CDN 加速"
+      - "公开镜像免费存储无限制"
+    use_case:
+      primary: "CI Runner 镜像"
+      secondary: "开发测试环境"
+
+  # Red Hat Quay.io
+  quay:
+    name: "Red Hat Quay"
+    url: "quay.io"
+    namespace: "ascendpytorch/ascend-ci"
+    auth:
+      type: "robot_account"
+      # 创建 Robot Account 获取 token
+      # quay.io/organization/ascendpytorch?tab=robots
+    features:
+      - "企业级镜像仓库"
+      - "内置安全扫描（Clair）"
+      - "镜像签名支持"
+      - "开源社区广泛使用"
+    use_case:
+      primary: "公开镜像分发"
+      secondary: "社区用户下载"
+
+  # 华为云 SWR (Software Repository for Container)
+  swr:
     name: "华为云 SWR"
     url: "swr.cn-east-3.myhuaweicloud.com"
     namespace: "ascend-ci"
@@ -505,38 +581,139 @@ registry:
       type: "iam"
       region: "cn-east-3"
       # IAM 用户需要 SWR 推送权限
-
-  backup:
-    name: "Docker Hub"
-    url: "docker.io"
-    namespace: "ascendpytorch"
-    auth:
-      type: "username_password"
+      # 或使用长期访问密钥 (AK/SK)
+    features:
+      - "国内访问速度最快"
+      - "与华为云 CCE/CCI 集成"
+      - "NPU 云原生支持"
+      - "镜像同步功能"
+    use_case:
+      primary: "生产环境部署"
+      secondary: "NPU Runner 运行"
 ```
 
-#### 2.5.2 镜像清理策略
+#### 2.5.3 鉴权配置
+
+**GitHub Actions 中配置 Secrets：**
 
 ```yaml
-# 镜像清理策略
-cleanup_policy:
-  # 保留策略
-  retention:
-    base_image:
-      keep_all: true  # Base Image 全部保留
-    cann_image:
-      keep_versions: ["8.0.RC1", "7.0.1", "6.3.RC2"]  # 保留支持的 CANN 版本
-    runner_image:
-      keep_days: 90   # 保留最近 90 天
-      keep_latest: 3  # 每个 CANN 版本保留最近 3 个
-    test_image:
-      keep_days: 30   # 每日镜像保留 30 天
-      keep_stable: true  # 稳定版本全部保留
+# GitHub Secrets 配置
+secrets:
+  # ghcr - 使用 GITHUB_TOKEN（自动提供）
+  # 无需额外配置，公开仓库自动使用
 
-  # 清理执行
-  schedule:
-    cron: "0 3 * * *"  # 每日凌晨 3 点执行清理
-    dry_run: false
+  # quay.io - Robot Account Token
+  QUAY_USERNAME: "ascendpytorch+robot_account_name"
+  QUAY_PASSWORD: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+  # 华为云 SWR - IAM 或 AK/SK
+  SWR_USERNAME: "cn-east-3@AKxxxxxxxxxxxx"
+  SWR_PASSWORD: "SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
+
+**Workflow 中的登录配置：**
+
+```yaml
+# 多仓库登录示例
+steps:
+  - name: Login to ghcr.io
+    uses: docker/login-action@v3
+    with:
+      registry: ghcr.io
+      username: ${{ github.actor }}
+      password: ${{ secrets.GITHUB_TOKEN }}
+
+  - name: Login to quay.io
+    uses: docker/login-action@v3
+    with:
+      registry: quay.io
+      username: ${{ secrets.QUAY_USERNAME }}
+      password: ${{ secrets.QUAY_PASSWORD }}
+
+  - name: Login to SWR
+    uses: docker/login-action@v3
+    with:
+      registry: swr.cn-east-3.myhuaweicloud.com
+      username: ${{ secrets.SWR_USERNAME }}
+      password: ${{ secrets.SWR_PASSWORD }}
+```
+
+#### 2.5.4 镜像同步策略
+
+```yaml
+# 镜像同步策略
+sync_policy:
+  # 同步触发
+  trigger:
+    on_build_success: true  # 构建成功后立即同步
+    on_stable_release: true # 稳定版本发布时同步
+
+  # 同步顺序（构建后依次推送）
+  order:
+    - ghcr    # 优先推送（CI 使用）
+    - swr     # 次优先（国内生产）
+    - quay    # 最后推送（公开分发）
+
+  # 同步范围
+  scope:
+    base_image:
+      sync_to: ["ghcr", "swr"]  # Base Image 仅同步到 ghcr 和 swr
+    cann_image:
+      sync_to: ["swr"]          # CANN 镜像仅同步到 SWR（华为生态）
+    runner_image:
+      sync_to: ["ghcr", "swr"]  # Runner 镜像同步到 ghcr 和 swr
+    test_image:
+      sync_to: ["ghcr", "swr", "quay"]  # Test 镜像全量同步
+
+  # 标签映射
+  tag_mapping:
+    ghcr:
+      format: "[image-name]:[tag]"
+      example: "ghcr.io/computing-infra/ascend-ci/test-npu:py2.7.0-cann8.0"
+    quay:
+      format: "[image-name]:[tag]"
+      example: "quay.io/ascendpytorch/ascend-ci/test-npu:py2.7.0-cann8.0"
+    swr:
+      format: "[image-name]:[tag]"
+      example: "swr.cn-east-3.myhuaweicloud.com/ascend-ci/test-npu:py2.7.0-cann8.0"
+```
+
+#### 2.5.5 镜像清理策略
+
+```yaml
+# 镜像清理策略（各仓库独立配置）
+cleanup_policy:
+  # ghcr 清理策略
+  ghcr:
+    retention:
+      base_image: keep_all
+      runner_image: keep_latest_10
+      test_image: keep_days_30
+    schedule: "0 4 * * *"  # UTC 04:00
+
+  # quay 清理策略
+  quay:
+    retention:
+      test_image: keep_days_60  # 公开分发保留更久
+      stable_versions: keep_all
+    schedule: "0 5 * * *"  # UTC 05:00
+    # quay.io 支持通过 API 或 Web UI 配置自动清理
+
+  # swr 清理策略
+  swr:
+    retention:
+      base_image: keep_all
+      cann_image: keep_versions: ["8.0.RC1", "7.0.1", "6.3.RC2"]
+      runner_image: keep_days_90
+      test_image: keep_days_30
+    schedule: "0 3 * * *"  # UTC 03:00（北京时间 11:00）
+    # 华为云 SWR 支持通过控制台或 API 配置生命周期规则
+
+  # 通用保留规则
+  common_rules:
+    stable_tag_pattern: "stable-*"  # 稳定版本标签，全部保留
+    latest_tag: always_keep          # latest 标签始终保留
+    cann_version_tag: keep_supported # 支持的 CANN 版本镜像保留
 
 ---
 
