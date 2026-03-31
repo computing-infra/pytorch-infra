@@ -185,19 +185,6 @@ jobs:
           path: ascend_pytorch/lint_report.md
           if-no-files-found: warn
 
-      - name: Create issue
-        if: steps.lint.outputs.has_issues == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          REPORT_CONTENT=$(cat ascend_pytorch/lint_report.md)
-          ISSUE_TITLE="Lint 检查报告 - ${{ steps.clone.outputs.commit_short }} (${{ steps.clone.outputs.commit_date }})"
-          echo "$REPORT_CONTENT" | gh issue create \
-            --repo ${{ github.repository }} \
-            --title "$ISSUE_TITLE" \
-            --body-file - \
-            --label "lint,automated" || echo "Failed to create issue (may already exist)"
-
       - name: Build summary
         if: always()
         run: |
