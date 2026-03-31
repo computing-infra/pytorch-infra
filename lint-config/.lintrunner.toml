@@ -45,7 +45,7 @@ init_command = [
     'lint-tools/adapters/s3_init.py',
     '--config-json=lint-tools/adapters/s3_init_config.json',
     '--linter=clang-format',
-    '--dry-run=0',
+    '--dry-run={{DRYRUN}}',
     '--output-dir=.lintbin',
     '--output-name=clang-format',
 ]
@@ -252,7 +252,7 @@ init_command = [
     'lint-tools/adapters/s3_init.py',
     '--config-json=lint-tools/adapters/s3_init_config.json',
     '--linter=actionlint',
-    '--dry-run=0',
+    '--dry-run={{DRYRUN}}',
     '--output-dir=.lintbin',
     '--output-name=actionlint',
 ]
