@@ -256,3 +256,102 @@ init_command = [
     '--output-dir=.lintbin',
     '--output-name=actionlint',
 ]
+
+# =====================================================
+# 第二批迁移：Python 最佳实践
+# =====================================================
+
+# ROOT_LOGGING - 禁止直接使用 root logger
+[[linter]]
+code = 'ROOT_LOGGING'
+include_patterns = [
+    'torch_npu/**/*.py',
+    'test/**/*.py',
+    'ci/**/*.py',
+    'examples/**/*.py',
+]
+exclude_patterns = [
+    'third_party/**',
+    'test/**/*.py',  # 测试文件允许
+    'torch_npu/_logging/__init__.py',  # logging 模块本身
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    '--pattern=logging\.(debug|info|warn|warning|error|critical|log|exception)\(',
+    '--replace-pattern=s/logging\.(debug|info|warn|warning|error|critical|log|exception)\(/log.\1(/',
+    '--linter-name=ROOT_LOGGING',
+    '--error-name=use of root logger',
+    '--error-description=Do not use root logger (logging.info, etc) directly; instead define "log = logging.getLogger(__name__)" and call, e.g., log.info().',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# NOQA - 检查未限定的 noqa
+[[linter]]
+code = 'NOQA'
+include_patterns = [
+    'torch_npu/**/*.py',
+    'torch_npu/**/*.pyi',
+    'ci/**/*.py',
+]
+exclude_patterns = [
+    'third_party/**',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    '--pattern=# noqa([^:]|$)',
+    '--linter-name=NOQA',
+    '--error-name=unqualified noqa',
+    '--error-description=This line has an unqualified "noqa"; please convert it to "noqa: XXXX".',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# TYPEIGNORE - 检查未限定的 type: ignore
+[[linter]]
+code = 'TYPEIGNORE'
+include_patterns = [
+    'torch_npu/**/*.py',
+    'torch_npu/**/*.pyi',
+    'ci/**/*.py',
+]
+exclude_patterns = [
+    'third_party/**',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    '--pattern=# type:\s*ignore([^\[]|$)',
+    '--linter-name=TYPEIGNORE',
+    '--error-name=unqualified type: ignore',
+    '--error-description=This line has an unqualified "type: ignore"; please convert it to "type: ignore[xxxx]".',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# PYFMT - Python 格式化 (usort + ruff-format)
+[[linter]]
+code = 'PYFMT'
+include_patterns = [
+    'torch_npu/**/*.py',
+    'torch_npu/**/*.pyi',
+    'test/**/*.py',
+    'ci/**/*.py',
+    'examples/**/*.py',
+]
+exclude_patterns = [
+    'third_party/**',
+    '**/generated/**',
+    '**/__pycache__/**',
+]
+command = [
+    'uv',
+    'run',
+    '--script',
+    'lint-tools/adapters/pyfmt_linter.py',
+    '--',
+    '@{{PATHSFILE}}'
+]
+is_formatter = true
