@@ -83,7 +83,8 @@ jobs:
         working-directory: ascend_pytorch
         run: |
           set +e
-          lintrunner --force-color --tee-json=lint.json 2>&1 | tee lint_output.txt || true
+          echo "=== Running lintrunner with verbose ==="
+          lintrunner --verbose --force-color --tee-json=lint.json 2>&1 | tee lint_output.txt || true
           LINT_EXIT_CODE=$?
 
           if [ -f lint.json ] && [ -s lint.json ]; then
