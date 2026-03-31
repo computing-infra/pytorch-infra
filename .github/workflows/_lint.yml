@@ -88,8 +88,9 @@ jobs:
           HAS_ISSUES="false"
 
           if [ -f lint.json ] && [ -s lint.json ]; then
-            ERRORS=$(jq '[.[] | select(.severity == "error")] | length' lint.json 2>/dev/null || echo "0")
-            WARNINGS=$(jq '[.[] | select(.severity == "warning" or .severity == "advice")] | length' lint.json 2>/dev/null || echo "0")
+            # lintrunner outputs JSON Lines format, need -s to slurp into array
+            ERRORS=$(jq -s '[.[] | select(.severity == "error")] | length' lint.json 2>/dev/null || echo "0")
+            WARNINGS=$(jq -s '[.[] | select(.severity == "warning" or .severity == "advice")] | length' lint.json 2>/dev/null || echo "0")
             echo "Lint results: ${ERRORS} errors, ${WARNINGS} warnings"
           fi
 
@@ -184,6 +185,7 @@ jobs:
 
       - name: Build summary
         if: always()
+        working-directory: ascend_pytorch
         run: |
           HAS_ISSUES="${{ steps.lint.outputs.has_issues }}"
           ERRORS="${{ steps.lint.outputs.errors }}"
@@ -195,17 +197,39 @@ jobs:
             STATUS_ICON="✅ PASSED"
           fi
 
+          # Generate linter statistics table from lint.json
+          LINTER_STATS=""
+          if [ -f lint.json ] && [ -s lint.json ]; then
+            LINTER_STATS=$(jq -rs '
+              group_by(.code) |
+              sort_by(.code) |
+              .[] |
+              {
+                code: .[0].code,
+                errors: [.[] | select(.severity == "error")] | length,
+                warnings: [.[] | select(.severity == "warning" or .severity == "advice")] | length
+              } |
+              "| \(.code) | \(.errors) | \(.warnings) |"
+            ' lint.json 2>/dev/null || echo "")
+          fi
+
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ## Lint 检查报告
 
-          | 项目 | 详情 |
-          |------|------|
-          | 扫描时间 | $(date -u '+%Y-%m-%d %H:%M UTC') |
-          | Ascend/pytorch Commit | [\`${{ steps.clone.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone.outputs.commit }}) |
-          | Commit 时间 | ${{ steps.clone.outputs.commit_date }} |
-          | 错误数 | ${ERRORS:-0} |
-          | 警告数 | ${WARNINGS:-0} |
-          | 结果 | ${STATUS_ICON} |
+          **扫描时间**: $(date -u '+%Y-%m-%d %H:%M UTC')
 
-          $( [ "$HAS_ISSUES" = "true" ] && echo "> 查看lint-report artifact获取详细报告" || echo "> 所有检查通过" )
+          **Ascend/pytorch Commit**: [\`${{ steps.clone.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone.outputs.commit }})
+
+          **Commit 时间**: ${{ steps.clone.outputs.commit_date }}
+
+          ### 当前检测结果统计
+
+          | Linter | 错误数 | 警告数 |
+          |--------|--------|--------|
+          ${LINTER_STATS}
+          | **总计** | **${ERRORS:-0}** | **${WARNINGS:-0}** |
+
+          **结果**: ${STATUS_ICON}
+
+          $( [ "$HAS_ISSUES" = "true" ] && echo "> 📥 查看 lint-report artifact 获取详细报告" || echo "> ✨ 所有检查通过" )
           EOF
