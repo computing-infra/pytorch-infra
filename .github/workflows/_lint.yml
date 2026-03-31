@@ -29,6 +29,9 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install lintrunner pyyaml jq
+          # Install uv for running linter scripts with inline dependencies
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Clone Ascend/pytorch
         id: clone
