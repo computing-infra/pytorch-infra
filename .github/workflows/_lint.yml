@@ -55,6 +55,7 @@ jobs:
           cp lint-config/.lintrunner.toml ascend_pytorch/
           cp lint-config/.clang-format ascend_pytorch/
           cp -r lint-tools ascend_pytorch/
+          cp -r lint-config ascend_pytorch/
 
       - name: Initialize linters
         working-directory: ascend_pytorch
