@@ -79,23 +79,23 @@ jobs:
             echo "lint.json does not exist"
           fi
 
+          ERRORS=0
+          WARNINGS=0
+          HAS_ISSUES="false"
+
           if [ -f lint.json ] && [ -s lint.json ]; then
             ERRORS=$(jq '[.[] | select(.severity == "error")] | length' lint.json 2>/dev/null || echo "0")
             WARNINGS=$(jq '[.[] | select(.severity == "warning" or .severity == "advice")] | length' lint.json 2>/dev/null || echo "0")
-            echo "errors=${ERRORS}" >> $GITHUB_OUTPUT
-            echo "warnings=${WARNINGS}" >> $GITHUB_OUTPUT
             echo "Lint results: ${ERRORS} errors, ${WARNINGS} warnings"
-          else
-            echo "errors=0" >> $GITHUB_OUTPUT
-            echo "warnings=0" >> $GITHUB_OUTPUT
-            echo "No lint issues found (lint.json is empty or missing)"
           fi
 
           if [ "$LINT_EXIT_CODE" -ne 0 ]; then
-            echo "has_issues=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_issues=false" >> $GITHUB_OUTPUT
+            HAS_ISSUES="true"
           fi
+
+          echo "errors=${ERRORS}" >> $GITHUB_OUTPUT
+          echo "warnings=${WARNINGS}" >> $GITHUB_OUTPUT
+          echo "has_issues=${HAS_ISSUES}" >> $GITHUB_OUTPUT
 
       - name: Generate lint report
         if: steps.lint.outputs.has_issues == 'true'
