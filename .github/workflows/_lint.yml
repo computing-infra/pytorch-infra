@@ -155,7 +155,7 @@ jobs:
               for filepath, file_issues in sorted(by_file.items()):
                   for issue in file_issues[:20]:
                       line_num = issue.get('line', '?')
-                      desc = issue.get('description', '')[:100]
+                      desc = (issue.get('description') or '')[:100]
                       lines.append('- \`' + filepath + ':' + str(line_num) + '\`: ' + desc)
 
                   if len(file_issues) > 20:
