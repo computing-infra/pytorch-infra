@@ -1,30 +1,6 @@
 # Lintrunner configuration for Ascend/pytorch
 # Adapted from PyTorch's .lintrunner.toml
 
-# Python PEP8 检查
-[[linter]]
-code = 'FLAKE8'
-include_patterns = [
-    'torch_npu/**/*.py',
-    'test/**/*.py',
-    'ci/**/*.py',
-    'examples/**/*.py',
-    'setup.py',
-    'build_libtorch_npu.py',
-]
-exclude_patterns = [
-    'third_party/**',
-    '**/generated/**',
-    '**/__pycache__/**',
-    'torch_npu/csrc/aten/**/*.py',  # 可能包含生成的代码
-]
-command = [
-    'python3',
-    'lint-tools/adapters/flake8_linter.py',
-    '--',
-    '@{{PATHSFILE}}'
-]
-
 # C++ 代码格式化检查
 [[linter]]
 code = 'CLANGFORMAT'
@@ -266,13 +242,11 @@ init_command = [
 code = 'ROOT_LOGGING'
 include_patterns = [
     'torch_npu/**/*.py',
-    'test/**/*.py',
     'ci/**/*.py',
     'examples/**/*.py',
 ]
 exclude_patterns = [
     'third_party/**',
-    'test/**/*.py',  # 测试文件允许
     'torch_npu/_logging/__init__.py',  # logging 模块本身
 ]
 command = [

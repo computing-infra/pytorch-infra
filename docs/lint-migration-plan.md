@@ -4,17 +4,16 @@
 
 ## 当前状态
 
-### 已迁移规则 (14个)
+### 已迁移规则 (13个)
 
 | Linter | 功能 | 状态 |
 |--------|------|------|
-| FLAKE8 | Python PEP8 代码检查 | ✅ 已完成 |
 | CLANGFORMAT | C++ 代码格式化检查 | ✅ 已完成 |
 | NEWLINE | 换行符检查（确保 LF） | ✅ 已完成 |
 | SPACES | 尾部空格检查 | ✅ 已完成 |
 | TABS | Tab 检查（应使用空格） | ✅ 已完成 |
 | NOBREAKSPACE | 非中断空格检查 | ✅ 已完成 |
-| RUFF | Python 综合检查 + 格式化 | ✅ 第一批 |
+| RUFF | Python 综合检查 + 格式化（替代 FLAKE8） | ✅ 第一批 |
 | CODESPELL | 拼写错误检查 | ✅ 第一批 |
 | SHELLCHECK | Shell 脚本检查 | ✅ 第一批 |
 | ACTIONLINT | GitHub Actions 检查 | ✅ 第一批 |
@@ -22,6 +21,10 @@
 | NOQA | 检查未限定的 noqa | ✅ 第二批 |
 | TYPEIGNORE | 检查未限定的 type: ignore | ✅ 第二批 |
 | PYFMT | Python 格式化 (usort + ruff) | ✅ 第二批 |
+
+**说明**：
+- FLAKE8 已被 RUFF 替代（RUFF 包含 E+F 规则，覆盖 FLAKE8 功能）
+- ROOT_LOGGING 不检查测试文件（测试场景允许直接使用 root logger）
 
 ---
 
