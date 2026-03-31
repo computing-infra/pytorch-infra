@@ -1,0 +1,23 @@
+name: Lint Ascend/pytorch
+
+on:
+  schedule:
+    - cron: '0 10 * * 1'  # UTC 10:00 周一（北京时间 18:00）
+  workflow_dispatch:
+    inputs:
+      ascend_commit:
+        description: 'Ascend/pytorch commit SHA (optional, defaults to latest)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    uses: ./.github/workflows/_lint.yml
+    with:
+      ascend_commit: ${{ github.event.inputs.ascend_commit || '' }}

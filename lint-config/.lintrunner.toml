@@ -1,0 +1,155 @@
+# Lintrunner configuration for Ascend/pytorch
+# Adapted from PyTorch's .lintrunner.toml
+
+# Python PEP8 检查
+[[linter]]
+code = 'FLAKE8'
+include_patterns = [
+    'torch_npu/**/*.py',
+    'test/**/*.py',
+    'ci/**/*.py',
+    'examples/**/*.py',
+    'setup.py',
+    'build_libtorch_npu.py',
+]
+exclude_patterns = [
+    'third_party/**',
+    '**/generated/**',
+    '**/__pycache__/**',
+    'torch_npu/csrc/aten/**/*.py',  # 可能包含生成的代码
+]
+command = [
+    'python3',
+    'lint-tools/adapters/flake8_linter.py',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# C++ 代码格式化检查
+[[linter]]
+code = 'CLANGFORMAT'
+include_patterns = [
+    'torch_npu/csrc/**/*.h',
+    'torch_npu/csrc/**/*.cpp',
+    'torch_npu/csrc/**/*.hpp',
+    'torch_npu/csrc/**/*.cuh',
+    'torch_npu/csrc/**/*.cu',
+]
+exclude_patterns = [
+    'third_party/**',
+    '**/generated/**',
+    '**/fb/**',
+]
+init_command = [
+    'python3',
+    'lint-tools/adapters/s3_init.py',
+    '--config-json=lint-tools/adapters/s3_init_config.json',
+    '--linter=clang-format',
+    '--dry-run=0',
+    '--output-dir=.lintbin',
+    '--output-name=clang-format',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/clangformat_linter.py',
+    '--binary=.lintbin/clang-format',
+    '--',
+    '@{{PATHSFILE}}'
+]
+is_formatter = true
+
+# 换行符检查（确保使用 LF）
+[[linter]]
+code = 'NEWLINE'
+include_patterns = ['**']
+exclude_patterns = [
+    'third_party/**',
+    '**/*.png',
+    '**/*.gz',
+    '**/*.zip',
+    '**/*.whl',
+    '**/*.patch',
+    '**/*.pdf',
+    '**/*.so',
+    '**/*.pyc',
+    '**/__pycache__/**',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/newlines_linter.py',
+    '--',
+    '@{{PATHSFILE}}',
+]
+is_formatter = true
+
+# 尾部空格检查
+[[linter]]
+code = 'SPACES'
+include_patterns = ['**']
+exclude_patterns = [
+    'third_party/**',
+    '**/*.png',
+    '**/*.gz',
+    '**/*.zip',
+    '**/*.whl',
+    '**/*.patch',
+    '**/*.pdf',
+    '**/*.so',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    '--pattern=[[:blank:]]$',
+    '--linter-name=SPACES',
+    '--error-name=trailing spaces',
+    '--replace-pattern=s/[[:blank:]]+$//',
+    '--error-description=This line has trailing spaces; please remove them.',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# Tab 检查（应该使用空格）
+[[linter]]
+code = 'TABS'
+include_patterns = ['**']
+exclude_patterns = [
+    'third_party/**',
+    '**/Makefile',
+    '**/*.svg',
+    '**/*.patch',
+    '.lintrunner.toml',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    # @lint-ignore TXT2
+    '--pattern=	',
+    '--linter-name=TABS',
+    '--error-name=saw some tabs',
+    '--replace-pattern=s/\t/    /',
+    '--error-description=This line has tabs; please replace them with spaces.',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# 非中断空格检查
+[[linter]]
+code = 'NOBREAKSPACE'
+include_patterns = ['**']
+exclude_patterns = [
+    'third_party/**',
+    '**/*.png',
+    '**/*.gz',
+    '**/*.pdf',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    # 非中断空格 U+00A0
+    '--pattern= ',
+    '--linter-name=NOBREAKSPACE',
+    '--error-name=non-breaking space',
+    '--error-description=This line has a non-breaking space (U+00A0); please convert it to a regular space (U+0020).',
+    '--',
+    '@{{PATHSFILE}}'
+]

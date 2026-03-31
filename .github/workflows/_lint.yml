@@ -1,0 +1,230 @@
+name: Lint Ascend/pytorch
+
+on:
+  workflow_call:
+    inputs:
+      ascend_commit:
+        description: 'Ascend/pytorch commit SHA (optional, defaults to latest)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  lint:
+    name: Run Lint Checks
+    runs-on: ubuntu-22.04
+    env:
+      PYTHON_VERSION: '3.11'
+
+    steps:
+      - name: Checkout pytorch-infra
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install lintrunner pyyaml jq
+
+      - name: Clone Ascend/pytorch
+        id: clone
+        run: |
+          if [ -n "${{ inputs.ascend_commit }}" ]; then
+            git clone --depth=1 https://gitcode.com/Ascend/pytorch.git ascend_pytorch
+            cd ascend_pytorch
+            git fetch --depth=1 origin ${{ inputs.ascend_commit }}
+            git checkout ${{ inputs.ascend_commit }}
+          else
+            git clone --depth=1 https://gitcode.com/Ascend/pytorch.git ascend_pytorch
+          fi
+          cd ascend_pytorch
+          COMMIT=$(git rev-parse HEAD)
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          COMMIT_DATE=$(git log -1 --format='%ci')
+          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+          echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
+          echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
+          echo "Ascend/pytorch commit: ${COMMIT} (${COMMIT_DATE})"
+
+      - name: Copy lint configuration
+        run: |
+          # 复制 lintrunner 配置
+          cp lint-config/.lintrunner.toml ascend_pytorch/
+
+          # 复制 clang-format 配置
+          cp lint-config/.clang-format ascend_pytorch/
+
+          # 复制 linter 工具
+          cp -r lint-tools ascend_pytorch/
+
+      - name: Initialize linters
+        working-directory: ascend_pytorch
+        run: |
+          # 初始化 lintrunner（下载 clang-format 等二进制）
+          lintrunner init || true
+
+      - name: Run lint checks
+        id: lint
+        working-directory: ascend_pytorch
+        run: |
+          set +e
+
+          # 执行 lint 检查
+          lintrunner --force-color --tee-json=lint.json 2>&1 | tee lint_output.txt || true
+          LINT_EXIT_CODE=$?
+
+          # 分析结果
+          if [ -f lint.json ] && [ -s lint.json ]; then
+            # 统计错误和警告
+            ERRORS=$(jq '[.[] | select(.severity == "error")] | length' lint.json 2>/dev/null || echo "0")
+            WARNINGS=$(jq '[.[] | select(.severity == "warning" or .severity == "advice")] | length' lint.json 2>/dev/null || echo "0")
+
+            echo "errors=${ERRORS}" >> $GITHUB_OUTPUT
+            echo "warnings=${WARNINGS}" >> $GITHUB_OUTPUT
+
+            echo "Lint results: ${ERRORS} errors, ${WARNINGS} warnings"
+          else
+            echo "errors=0" >> $GITHUB_OUTPUT
+            echo "warnings=0" >> $GITHUB_OUTPUT
+            echo "No lint issues found"
+          fi
+
+          # 标记是否有问题
+          if [ "$LINT_EXIT_CODE" -ne 0 ]; then
+            echo "has_issues=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_issues=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate lint report
+        if: steps.lint.outputs.has_issues == 'true'
+        working-directory: ascend_pytorch
+        run: |
+          python3 << 'EOF'
+          import json
+          from datetime import datetime
+          from collections import defaultdict
+
+          # 读取 lint 结果
+          with open('lint.json', 'r') as f:
+              results = [json.loads(line) for line in f if line.strip()]
+
+          # 按代码分组
+          by_code = defaultdict(list)
+          for r in results:
+              if r.get('severity') in ['error', 'warning', 'advice']:
+                  by_code[r.get('code', 'UNKNOWN')].append(r)
+
+          # 生成报告
+          commit = "${{ steps.clone.outputs.commit }}"
+          commit_short = "${{ steps.clone.outputs.commit_short }}"
+          commit_date = "${{ steps.clone.outputs.commit_date }}"
+
+          report = f"""# Lint 检查报告
+
+**扫描时间**: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}
+**Ascend/pytorch Commit**: [`{commit_short}`](https://gitcode.com/Ascend/pytorch/commit/{commit})
+**Commit 时间**: {commit_date}
+
+## 检查结果统计
+
+| Linter | 错误数 | 警告数 |
+|--------|--------|--------|
+"""
+
+          for code in sorted(by_code.keys()):
+              issues = by_code[code]
+              errors = len([i for i in issues if i.get('severity') == 'error'])
+              warnings = len([i for i in issues if i.get('severity') in ['warning', 'advice']])
+              report += f"| {code} | {errors} | {warnings} |\n"
+
+          report += "\n---\n\n## 详细问题列表\n\n"
+
+          for code in sorted(by_code.keys()):
+              issues = by_code[code]
+              report += f"### {code}\n\n"
+
+              # 按文件分组
+              by_file = defaultdict(list)
+              for issue in issues[:100]:  # 限制每个 linter 显示 100 条
+                  by_file[issue.get('path', 'unknown')].append(issue)
+
+              for filepath, file_issues in sorted(by_file.items()):
+                  for issue in file_issues[:20]:  # 每个文件最多 20 条
+                      line = issue.get('line', '?')
+                      desc = issue.get('description', '')[:100]
+                      report += f"- `{filepath}:{line}`: {desc}\n"
+
+                  if len(file_issues) > 20:
+                      report += f"  - ... 还有 {len(file_issues) - 20} 条问题\n"
+
+              if len(issues) > 100:
+                  report += f"\n> 该 linter 共发现 {len(issues)} 条问题，仅显示前 100 条\n"
+
+              report += "\n"
+
+          report += "\n---\n*报告由 CI 自动生成*\n"
+
+          with open('lint_report.md', 'w') as f:
+              f.write(report)
+
+          print(f"Generated report with {len(results)} issues")
+          EOF
+
+      - name: Upload lint report
+        if: steps.lint.outputs.has_issues == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report-${{ github.run_number }}
+          path: ascend_pytorch/lint_report.md
+          if-no-files-found: warn
+
+      - name: Create issue
+        if: steps.lint.outputs.has_issues == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 读取报告
+          REPORT_CONTENT=$(cat ascend_pytorch/lint_report.md)
+
+          # 创建 issue
+          ISSUE_TITLE="Lint 检查报告 - ${{ steps.clone.outputs.commit_short }} (${{ steps.clone.outputs.commit_date }})"
+
+          echo "$REPORT_CONTENT" | gh issue create \
+            --repo ${{ github.repository }} \
+            --title "$ISSUE_TITLE" \
+            --body-file - \
+            --label "lint,automated" || echo "Failed to create issue (may already exist)"
+
+      - name: Build summary
+        if: always()
+        run: |
+          HAS_ISSUES="${{ steps.lint.outputs.has_issues }}"
+          ERRORS="${{ steps.lint.outputs.errors }}"
+          WARNINGS="${{ steps.lint.outputs.warnings }}"
+
+          if [ "$HAS_ISSUES" = "true" ]; then
+            STATUS_ICON="⚠️ ISSUES FOUND"
+          else
+            STATUS_ICON="✅ PASSED"
+          fi
+
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## Lint 检查报告
+
+          | 项目 | 详情 |
+          |------|------|
+          | 扫描时间 | $(date -u '+%Y-%m-%d %H:%M UTC') |
+          | Ascend/pytorch Commit | [\`${{ steps.clone.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone.outputs.commit }}) |
+          | Commit 时间 | ${{ steps.clone.outputs.commit_date }} |
+          | 错误数 | ${ERRORS:-0} |
+          | 警告数 | ${WARNINGS:-0} |
+          | 结果 | ${STATUS_ICON} |
+
+          $( [ "$HAS_ISSUES" = "true" ] && echo "> 查看lint-report artifact获取详细报告" || echo "> 所有检查通过" )
+          EOF

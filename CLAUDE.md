@@ -4,11 +4,12 @@
 
 ## 项目概述
 
-本仓库用于**每日集成验证** [Ascend/pytorch](https://gitcode.com/Ascend/pytorch.git) 与 PyTorch nightly 版本的编译兼容性。
+本仓库用于**每日集成验证** [Ascend/pytorch](https://gitcode.com/Ascend/pytorch.git) 与 PyTorch nightly 版本的编译兼容性，以及**代码静态扫描**。
 
 ### 核心定位
 - **每日集成**：自动拉取 PyTorch nightly 和 Ascend/pytorch 最新代码进行编译验证
-- **问题追踪**：CI 失败时，使用 `/analyze-failure` 分析错误并创建 issue
+- **代码扫描**：定期对 Ascend/pytorch 进行代码静态分析
+- **问题追踪**：CI 失败或 lint 检查发现问题时，创建 issue 记录
 - **修复建议**：输出根本原因分析和修复建议，但**不需要直接修复或生成 patch**
 
 ### 工作边界
@@ -28,8 +29,23 @@ gh run list --repo computing-infra/pytorch-infra --limit 5
 # 手动触发构建
 gh workflow run nightly-build.yml --repo computing-infra/pytorch-infra
 
+# 手动触发 lint 检查
+gh workflow run lint.yml --repo computing-infra/pytorch-infra
+
 # 查看失败运行的日志
 gh run view <run_id> --repo computing-infra/pytorch-infra --log-failed
+```
+
+### 本地 Lint 测试
+```bash
+# 运行 lint 检查（克隆 Ascend/pytorch 到 /tmp/ascend_pytorch_lint）
+.github/scripts/lint-runner.sh
+
+# 运行 lint 检查（指定已有目录）
+.github/scripts/lint-runner.sh /path/to/ascend_pytorch
+
+# 自动修复可修复的问题
+.github/scripts/lint-fix.sh /path/to/ascend_pytorch
 ```
 
 ### 本地 Ascend/pytorch 源码分析
@@ -81,6 +97,26 @@ fi
 ### Issue 追踪 (`issues/`)
 - 格式：`YYYY-MM-DD-NNN-<模块描述>.md`
 - 记录根本原因、受影响文件、修复建议
+
+### Workflow: `.github/workflows/lint.yml`
+- **触发方式**：每周一 UTC 10:00（北京时间 18:00）自动触发，或通过 `workflow_dispatch` 手动触发
+- **运行环境**：`ubuntu-22.04`，Python 3.11
+- **检查流程**：
+  1. 克隆 Ascend/pytorch 最新代码
+  2. 应用 lint 配置文件（`.lintrunner.toml`, `.clang-format`）
+  3. 使用 lintrunner 执行代码静态扫描
+  4. 生成报告并创建 issue（如发现问题）
+
+### Linter 配置 (`lint-config/`)
+- `.lintrunner.toml`：lintrunner 配置，定义检查规则
+- `.clang-format`：C++ 代码格式化配置
+
+### Linter 工具 (`lint-tools/adapters/`)
+从 PyTorch 复制的 linter 适配器脚本：
+- `flake8_linter.py`：Python PEP8 检查
+- `clangformat_linter.py`：C++ 代码格式化检查
+- `newlines_linter.py`：换行符检查
+- `grep_linter.py`：通用模式匹配检查
 
 ## Slash 命令
 
