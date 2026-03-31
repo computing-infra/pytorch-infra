@@ -53,19 +53,13 @@ jobs:
 
       - name: Copy lint configuration
         run: |
-          # 复制 lintrunner 配置
           cp lint-config/.lintrunner.toml ascend_pytorch/
-
-          # 复制 clang-format 配置
           cp lint-config/.clang-format ascend_pytorch/
-
-          # 复制 linter 工具
           cp -r lint-tools ascend_pytorch/
 
       - name: Initialize linters
         working-directory: ascend_pytorch
         run: |
-          # 初始化 lintrunner（下载 clang-format 等二进制）
           lintrunner init || true
 
       - name: Run lint checks
@@ -73,20 +67,14 @@ jobs:
         working-directory: ascend_pytorch
         run: |
           set +e
-
-          # 执行 lint 检查
           lintrunner --force-color --tee-json=lint.json 2>&1 | tee lint_output.txt || true
           LINT_EXIT_CODE=$?
 
-          # 分析结果
           if [ -f lint.json ] && [ -s lint.json ]; then
-            # 统计错误和警告
             ERRORS=$(jq '[.[] | select(.severity == "error")] | length' lint.json 2>/dev/null || echo "0")
             WARNINGS=$(jq '[.[] | select(.severity == "warning" or .severity == "advice")] | length' lint.json 2>/dev/null || echo "0")
-
             echo "errors=${ERRORS}" >> $GITHUB_OUTPUT
             echo "warnings=${WARNINGS}" >> $GITHUB_OUTPUT
-
             echo "Lint results: ${ERRORS} errors, ${WARNINGS} warnings"
           else
             echo "errors=0" >> $GITHUB_OUTPUT
@@ -94,7 +82,6 @@ jobs:
             echo "No lint issues found"
           fi
 
-          # 标记是否有问题
           if [ "$LINT_EXIT_CODE" -ne 0 ]; then
             echo "has_issues=true" >> $GITHUB_OUTPUT
           else
@@ -105,76 +92,80 @@ jobs:
         if: steps.lint.outputs.has_issues == 'true'
         working-directory: ascend_pytorch
         run: |
-          python3 << 'EOF'
+          python3 -c "
           import json
           from datetime import datetime
           from collections import defaultdict
 
-          # 读取 lint 结果
           with open('lint.json', 'r') as f:
               results = [json.loads(line) for line in f if line.strip()]
 
-          # 按代码分组
           by_code = defaultdict(list)
           for r in results:
               if r.get('severity') in ['error', 'warning', 'advice']:
                   by_code[r.get('code', 'UNKNOWN')].append(r)
 
-          # 生成报告
-          commit = "${{ steps.clone.outputs.commit }}"
-          commit_short = "${{ steps.clone.outputs.commit_short }}"
-          commit_date = "${{ steps.clone.outputs.commit_date }}"
+          commit = '${{ steps.clone.outputs.commit }}'
+          commit_short = '${{ steps.clone.outputs.commit_short }}'
+          commit_date = '${{ steps.clone.outputs.commit_date }}'
+          scan_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
 
-          report = f"""# Lint 检查报告
-
-**扫描时间**: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}
-**Ascend/pytorch Commit**: [`{commit_short}`](https://gitcode.com/Ascend/pytorch/commit/{commit})
-**Commit 时间**: {commit_date}
-
-## 检查结果统计
-
-| Linter | 错误数 | 警告数 |
-|--------|--------|--------|
-"""
+          lines = []
+          lines.append('# Lint 检查报告')
+          lines.append('')
+          lines.append('**扫描时间**: ' + scan_time)
+          lines.append('**Ascend/pytorch Commit**: [\`' + commit_short + '\`](https://gitcode.com/Ascend/pytorch/commit/' + commit + ')')
+          lines.append('**Commit 时间**: ' + commit_date)
+          lines.append('')
+          lines.append('## 检查结果统计')
+          lines.append('')
+          lines.append('| Linter | 错误数 | 警告数 |')
+          lines.append('|--------|--------|--------|')
 
           for code in sorted(by_code.keys()):
               issues = by_code[code]
               errors = len([i for i in issues if i.get('severity') == 'error'])
               warnings = len([i for i in issues if i.get('severity') in ['warning', 'advice']])
-              report += f"| {code} | {errors} | {warnings} |\n"
+              lines.append('| ' + code + ' | ' + str(errors) + ' | ' + str(warnings) + ' |')
 
-          report += "\n---\n\n## 详细问题列表\n\n"
+          lines.append('')
+          lines.append('---')
+          lines.append('')
+          lines.append('## 详细问题列表')
+          lines.append('')
 
           for code in sorted(by_code.keys()):
               issues = by_code[code]
-              report += f"### {code}\n\n"
+              lines.append('### ' + code)
+              lines.append('')
 
-              # 按文件分组
               by_file = defaultdict(list)
-              for issue in issues[:100]:  # 限制每个 linter 显示 100 条
+              for issue in issues[:100]:
                   by_file[issue.get('path', 'unknown')].append(issue)
 
               for filepath, file_issues in sorted(by_file.items()):
-                  for issue in file_issues[:20]:  # 每个文件最多 20 条
-                      line = issue.get('line', '?')
+                  for issue in file_issues[:20]:
+                      line_num = issue.get('line', '?')
                       desc = issue.get('description', '')[:100]
-                      report += f"- `{filepath}:{line}`: {desc}\n"
+                      lines.append('- \`' + filepath + ':' + str(line_num) + '\`: ' + desc)
 
                   if len(file_issues) > 20:
-                      report += f"  - ... 还有 {len(file_issues) - 20} 条问题\n"
+                      lines.append('  - ... 还有 ' + str(len(file_issues) - 20) + ' 条问题')
 
               if len(issues) > 100:
-                  report += f"\n> 该 linter 共发现 {len(issues)} 条问题，仅显示前 100 条\n"
+                  lines.append('')
+                  lines.append('> 该 linter 共发现 ' + str(len(issues)) + ' 条问题，仅显示前 100 条')
 
-              report += "\n"
+              lines.append('')
 
-          report += "\n---\n*报告由 CI 自动生成*\n"
+          lines.append('---')
+          lines.append('*报告由 CI 自动生成*')
 
           with open('lint_report.md', 'w') as f:
-              f.write(report)
+              f.write('\n'.join(lines))
 
-          print(f"Generated report with {len(results)} issues")
-          EOF
+          print('Generated report with ' + str(len(results)) + ' issues')
+          "
 
       - name: Upload lint report
         if: steps.lint.outputs.has_issues == 'true'
@@ -189,12 +180,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 读取报告
           REPORT_CONTENT=$(cat ascend_pytorch/lint_report.md)
-
-          # 创建 issue
           ISSUE_TITLE="Lint 检查报告 - ${{ steps.clone.outputs.commit_short }} (${{ steps.clone.outputs.commit_date }})"
-
           echo "$REPORT_CONTENT" | gh issue create \
             --repo ${{ github.repository }} \
             --title "$ISSUE_TITLE" \
