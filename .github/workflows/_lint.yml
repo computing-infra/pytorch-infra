@@ -149,22 +149,15 @@ jobs:
               lines.append('')
 
               by_file = defaultdict(list)
-              for issue in issues[:100]:
+              for issue in issues:
                   filepath = issue.get('path') or 'unknown'
                   by_file[filepath].append(issue)
 
               for filepath, file_issues in sorted(by_file.items()):
-                  for issue in file_issues[:20]:
+                  for issue in file_issues:
                       line_num = issue.get('line') or '?'
-                      desc = (issue.get('description') or '')[:100]
+                      desc = issue.get('description') or ''
                       lines.append('- \`' + filepath + ':' + str(line_num) + '\`: ' + desc)
-
-                  if len(file_issues) > 20:
-                      lines.append('  - ... 还有 ' + str(len(file_issues) - 20) + ' 条问题')
-
-              if len(issues) > 100:
-                  lines.append('')
-                  lines.append('> 该 linter 共发现 ' + str(len(issues)) + ' 条问题，仅显示前 100 条')
 
               lines.append('')
 
