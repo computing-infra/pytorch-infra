@@ -356,6 +356,7 @@ command = [
     '--',
     '@{{PATHSFILE}}'
 ]
+is_formatter = true
 
 # C10_NODISCARD - 检查已弃用的 C10_NODISCARD 宏
 [[linter]]
@@ -379,6 +380,7 @@ command = [
     '--',
     '@{{PATHSFILE}}'
 ]
+is_formatter = true
 
 # RAWTHROW - 禁止直接使用 throw 语句
 [[linter]]
@@ -430,3 +432,4 @@ command = [
     '--',
     '@{{PATHSFILE}}'
 ]
+is_formatter = true

@@ -61,23 +61,6 @@ jobs:
         run: |
           lintrunner init || true
 
-      - name: Debug lint setup
-        working-directory: ascend_pytorch
-        run: |
-          echo "=== Current directory ==="
-          pwd
-          echo "=== Files matching C++ patterns ==="
-          find . -name "*.cpp" -o -name "*.h" | head -20
-          echo "=== Checking C10_UNUSED pattern ==="
-          grep -rn "C10_UNUSED" --include="*.cpp" --include="*.h" . | head -5
-          echo "=== Testing grep_linter.py ==="
-          python3 lint-tools/adapters/grep_linter.py \
-            --pattern="C10_UNUSED" \
-            --linter-name="C10_UNUSED" \
-            --error-name="deprecated C10_UNUSED macro" \
-            --error-description="test" \
-            torch_npu/csrc/distributed/rpc/tensorpipe_agent.cpp 2>&1 | head -5
-
       - name: Run lint checks
         id: lint
         working-directory: ascend_pytorch
