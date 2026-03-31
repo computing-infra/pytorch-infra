@@ -203,7 +203,7 @@
 - 2026-03-31: 第三批迁移后验证成功，workflow运行正常
   - 检测到 Ascend/pytorch 存在 962 条 lint 问题
   - 问题分布：CLANGFORMAT(349), INCLUDE(283), SPACES(251), RAWTHROW(165), NEWLINE(93), TABS(12), C10_UNUSED(3), NOQA(3), C10_NODISCARD(1), CODESPELL(1), PYFMT(1), RUFF(1), SHELLCHECK(1)
-  - 已创建 lint 和 automated 标签用于 issue 创建
+  - lint 报告通过 artifact 上传，不自动创建 issue
 
 ---
 
