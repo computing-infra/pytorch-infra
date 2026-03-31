@@ -67,8 +67,17 @@ jobs:
         run: |
           set +e
           echo "=== Running lintrunner on all files ==="
-          lintrunner --all-files --force-color --tee-json=lint.json 2>&1 | tee lint_output.txt || true
-          LINT_EXIT_CODE=$?
+          lintrunner --all-files --force-color --tee-json=lint.json 2>&1 | tee lint_output.txt
+          LINT_EXIT_CODE=${PIPESTATUS[0]}
+
+          echo "=== Lint exit code: ${LINT_EXIT_CODE} ==="
+          echo "=== Checking lint.json ==="
+          if [ -f lint.json ]; then
+            echo "lint.json exists, size: $(wc -c < lint.json) bytes"
+            head -5 lint.json 2>/dev/null || echo "Cannot read lint.json"
+          else
+            echo "lint.json does not exist"
+          fi
 
           if [ -f lint.json ] && [ -s lint.json ]; then
             ERRORS=$(jq '[.[] | select(.severity == "error")] | length' lint.json 2>/dev/null || echo "0")
@@ -79,7 +88,7 @@ jobs:
           else
             echo "errors=0" >> $GITHUB_OUTPUT
             echo "warnings=0" >> $GITHUB_OUTPUT
-            echo "No lint issues found"
+            echo "No lint issues found (lint.json is empty or missing)"
           fi
 
           if [ "$LINT_EXIT_CODE" -ne 0 ]; then
