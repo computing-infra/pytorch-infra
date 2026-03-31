@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-### 已迁移规则 (20个)
+### 已迁移规则 (21个)
 
 | Linter | 功能 | 状态 |
 |--------|------|------|
@@ -28,6 +28,7 @@
 | CMAKE | CMake 文件检查 | ✅ 第四批 |
 | PYPROJECT | pyproject.toml 检查 | ✅ 第四批 |
 | CMAKE_MINIMUM_REQUIRED | CMake/pyproject 最低版本 | ✅ 第四批 |
+| COPYRIGHT | 检查机密代码 | ✅ 第五批 |
 
 **说明**：
 - FLAKE8 已被 RUFF 替代（RUFF 包含 E+F 规则，覆盖 FLAKE8 功能）
@@ -234,17 +235,85 @@ CMAKE_MINIMUM_VERSION_STRING = "3.27"  # PyTorch 要求版本
 
 **预计完成时间**：1 天
 
-| Linter | 功能 | 迁移难度 | 价值 |
-|--------|------|----------|------|
-| **TEST_HAS_MAIN** | 测试文件入口检查 | 低 | ⭐⭐⭐ |
-| **COPYRIGHT** | 检查机密代码 | 低 | ⭐⭐ |
+#### 规则详细分析
 
-**迁移步骤**：
+| Linter | 功能 | 迁移难度 | 价值 | 改造需求 |
+|--------|------|----------|------|----------|
+| **TEST_HAS_MAIN** | 测试文件入口检查 | 低 | ⭐⭐⭐ | 低 - 调整 patterns |
+| **COPYRIGHT** | 检查机密代码 | 低 | ⭐⭐ | 无 - 直接复制 |
 
-1. 复制 `test_has_main_linter.py`
-2. 使用 `grep_linter.py` 实现 COPYRIGHT
-3. 更新 `.lintrunner.toml`
-4. 测试验证
+#### 1. TEST_HAS_MAIN 规则分析
+
+**PyTorch 配置**：
+```toml
+[[linter]]
+code = 'TEST_HAS_MAIN'
+include_patterns = ['test/**/test_*.py']
+exclude_patterns = [
+    'test/run_test.py',
+    '**/fb/**',
+    # ... 大量排除项
+]
+command = ['uv', 'run', '--script', 'tools/linter/adapters/test_has_main_linter.py', '--', '@{{PATHSFILE}}']
+```
+
+**功能**：
+- 检查测试文件是否有 `if __name__ == "__main__"` 块
+- 确保测试文件调用 `run_tests()` 或抛出异常
+- 保证测试能在 OSS CI 中运行
+
+**Ascend/pytorch 结构**：
+- 有 614 个 `test_*.py` 文件
+- 只有 47 个文件有 `if __name__` 块
+- 需要排除大量不适用该规则的测试文件
+
+**改造方案**：
+- 复制 `test_has_main_linter.py` 脚本
+- 调整 exclude_patterns 适配 Ascend/pytorch 测试结构
+- 由于 Ascend/pytorch 测试框架可能不同，可考虑仅保留 COPYRIGHT 规则
+
+#### 2. COPYRIGHT 规则分析
+
+**PyTorch 配置**：
+```toml
+[[linter]]
+code = 'COPYRIGHT'
+include_patterns = ['**']
+exclude_patterns = ['.lintrunner.toml', 'fb/**', '**/fb/**']
+command = [
+    'python3',
+    'tools/linter/adapters/grep_linter.py',
+    '--pattern=Confidential and proprietary',
+    '--linter-name=COPYRIGHT',
+    '--error-name=Confidential Code',
+    '--error-description=Proprietary and confidential source code should not be contributed to PyTorch codebase',
+    '--',
+    '@{{PATHSFILE}}'
+]
+```
+
+**功能**：
+- 检测代码中是否包含 "Confidential and proprietary" 字样
+- 防止机密代码被提交到开源仓库
+
+**Ascend/pytorch 结构**：
+- 当前未检测到机密代码
+- 作为预防措施保留此规则
+
+**改造方案**：
+- 使用 `grep_linter.py` 实现，无需创建新脚本
+- 直接在 `.lintrunner.toml` 中添加配置
+
+#### 迁移决策
+
+由于 Ascend/pytorch 测试框架与 PyTorch 可能存在差异，且大量测试文件不符合 `TEST_HAS_MAIN` 规则要求，决定：
+1. **COPYRIGHT**：迁移，用于防止机密代码提交
+2. **TEST_HAS_MAIN**：暂缓迁移，待确认 Ascend/pytorch 测试框架要求
+
+#### 迁移步骤
+
+1. 在 `.lintrunner.toml` 中添加 COPYRIGHT 规则配置
+2. 测试验证
 
 ---
 
@@ -277,6 +346,8 @@ CMAKE_MINIMUM_VERSION_STRING = "3.27"  # PyTorch 要求版本
 | PYBIND11_INCLUDE | 需确认 torch_npu 的 pybind 使用情况 |
 | PYBIND11_SPECIALIZATION | 同上 |
 | TESTOWNERS | 需要 owner 机制支持 |
+| TEST_HAS_MAIN | Ascend/pytorch 测试框架差异，614个测试文件仅47个有main块 |
+| CLANGTIDY | 需要 compile_commands.json，迁移难度高 |
 
 ---
 
@@ -289,7 +360,7 @@ CMAKE_MINIMUM_VERSION_STRING = "3.27"  # PyTorch 要求版本
 | 第二批 (Python实践) | ✅ 完成 | 2026-03-31 | 2026-03-31 |
 | 第三批 (C++实践) | ✅ 完成 (除CLANGTIDY) | 2026-03-31 | 2026-03-31 |
 | 第四批 (构建系统) | ✅ 完成 | 2026-03-31 | 2026-03-31 |
-| 第五批 (测试相关) | ⏳ 待开始 | - | - |
+| 第五批 (测试相关) | ✅ 完成 (COPYRIGHT, TEST_HAS_MAIN暂缓) | 2026-03-31 | 2026-03-31 |
 
 **验证记录**：
 - 2026-03-31: 第三批迁移后验证成功，workflow运行正常
