@@ -371,6 +371,9 @@ command = [
   - 新增检测：CMAKE(42), CODESPELL(205), RUFF(225错误+8876警告), SHELLCHECK(32), PYFMT(951)
   - 需要在 workflow 中安装 uv 工具用于运行内联依赖脚本
   - CMAKE 检测到 `if()` 语句中的额外空格问题
+- 2026-03-31: 第五批迁移后验证成功
+  - COPYRIGHT 规则正常工作，未检测到机密代码
+  - TEST_HAS_MAIN 暂缓迁移
 
 ---
 
