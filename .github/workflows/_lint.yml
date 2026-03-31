@@ -150,11 +150,12 @@ jobs:
 
               by_file = defaultdict(list)
               for issue in issues[:100]:
-                  by_file[issue.get('path', 'unknown')].append(issue)
+                  filepath = issue.get('path') or 'unknown'
+                  by_file[filepath].append(issue)
 
               for filepath, file_issues in sorted(by_file.items()):
                   for issue in file_issues[:20]:
-                      line_num = issue.get('line', '?')
+                      line_num = issue.get('line') or '?'
                       desc = (issue.get('description') or '')[:100]
                       lines.append('- \`' + filepath + ':' + str(line_num) + '\`: ' + desc)
 
