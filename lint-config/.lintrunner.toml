@@ -338,11 +338,12 @@ is_formatter = true
 [[linter]]
 code = 'C10_UNUSED'
 include_patterns = [
-    'torch_npu/csrc/**/*.cpp',
-    'torch_npu/csrc/**/*.h',
+    '**/*.cpp',
+    '**/*.h',
 ]
 exclude_patterns = [
     'third_party/**',
+    'test/**',
 ]
 command = [
     'python3',
@@ -360,11 +361,12 @@ command = [
 [[linter]]
 code = 'C10_NODISCARD'
 include_patterns = [
-    'torch_npu/csrc/**/*.cpp',
-    'torch_npu/csrc/**/*.h',
+    '**/*.cpp',
+    '**/*.h',
 ]
 exclude_patterns = [
     'third_party/**',
+    'test/**',
 ]
 command = [
     'python3',
@@ -382,11 +384,12 @@ command = [
 [[linter]]
 code = 'RAWTHROW'
 include_patterns = [
-    'torch_npu/csrc/**/*.cpp',
-    'torch_npu/csrc/**/*.h',
+    '**/*.cpp',
+    '**/*.h',
 ]
 exclude_patterns = [
     'third_party/**',
+    'test/**',
     # Python binding code uses throw python_error()
     'torch_npu/csrc/npu/Stream.cpp',
     'torch_npu/csrc/npu/Event.cpp',
@@ -409,10 +412,12 @@ command = [
 [[linter]]
 code = 'INCLUDE'
 include_patterns = [
-    'torch_npu/csrc/**',
+    '**/*.cpp',
+    '**/*.h',
 ]
 exclude_patterns = [
     'third_party/**',
+    'test/**',
 ]
 command = [
     'python3',
