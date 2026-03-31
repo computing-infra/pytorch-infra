@@ -329,3 +329,99 @@ command = [
     '@{{PATHSFILE}}'
 ]
 is_formatter = true
+
+# =====================================================
+# 第三批迁移：C++ 最佳实践
+# =====================================================
+
+# C10_UNUSED - 检查已弃用的 C10_UNUSED 宏
+[[linter]]
+code = 'C10_UNUSED'
+include_patterns = [
+    'torch_npu/csrc/**/*.cpp',
+    'torch_npu/csrc/**/*.h',
+]
+exclude_patterns = [
+    'third_party/**',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    '--pattern=C10_UNUSED',
+    '--linter-name=C10_UNUSED',
+    '--error-name=deprecated C10_UNUSED macro',
+    '--replace-pattern=s/C10_UNUSED/[[maybe_unused]]/',
+    '--error-description=Deprecated macro, use [[maybe_unused]] directly.',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# C10_NODISCARD - 检查已弃用的 C10_NODISCARD 宏
+[[linter]]
+code = 'C10_NODISCARD'
+include_patterns = [
+    'torch_npu/csrc/**/*.cpp',
+    'torch_npu/csrc/**/*.h',
+]
+exclude_patterns = [
+    'third_party/**',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    '--pattern=C10_NODISCARD',
+    '--linter-name=C10_NODISCARD',
+    '--error-name=deprecated C10_NODISCARD macro',
+    '--replace-pattern=s/C10_NODISCARD/[[nodiscard]]/',
+    '--error-description=Deprecated macro, use [[nodiscard]] directly.',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# RAWTHROW - 禁止直接使用 throw 语句
+[[linter]]
+code = 'RAWTHROW'
+include_patterns = [
+    'torch_npu/csrc/**/*.cpp',
+    'torch_npu/csrc/**/*.h',
+]
+exclude_patterns = [
+    'third_party/**',
+    # Python binding code uses throw python_error()
+    'torch_npu/csrc/npu/Stream.cpp',
+    'torch_npu/csrc/npu/Event.cpp',
+    # Exception handling in specific modules
+    'torch_npu/csrc/npu/DataParallelComm.cpp',
+    'torch_npu/csrc/framework/OpParamMaker.cpp',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    '--pattern=\bthrow\b',
+    '--linter-name=RAWTHROW',
+    '--error-name=raw throw statement',
+    '--error-description=Do not use raw throw in C++ code. Use TORCH_CHECK or other error-reporting macros instead. See c10/util/Exception.h for available macros.',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# INCLUDE - 检查 #include 格式（统一使用尖括号）
+[[linter]]
+code = 'INCLUDE'
+include_patterns = [
+    'torch_npu/csrc/**',
+]
+exclude_patterns = [
+    'third_party/**',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/grep_linter.py',
+    '--pattern=#include "torch_npu',
+    '--linter-name=INCLUDE',
+    '--error-name=quoted include for project header',
+    '--replace-pattern=s/#include "torch_npu(.*)"/#include <torch_npu\1>/',
+    '--error-description=This #include uses quotes for project header; please convert it to #include <torch_npu/xxxx>.',
+    '--',
+    '@{{PATHSFILE}}'
+]
