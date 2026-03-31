@@ -296,6 +296,10 @@ CMAKE_MINIMUM_VERSION_STRING = "3.27"  # PyTorch 要求版本
   - 检测到 Ascend/pytorch 存在 962 条 lint 问题
   - 问题分布：CLANGFORMAT(349), INCLUDE(283), SPACES(251), RAWTHROW(165), NEWLINE(93), TABS(12), C10_UNUSED(3), NOQA(3), C10_NODISCARD(1), CODESPELL(1), PYFMT(1), RUFF(1), SHELLCHECK(1)
   - lint 报告通过 artifact 上传，不自动创建 issue
+- 2026-03-31: 第四批迁移后验证成功
+  - 新增检测：CMAKE(42), CODESPELL(205), RUFF(225错误+8876警告), SHELLCHECK(32), PYFMT(951)
+  - 需要在 workflow 中安装 uv 工具用于运行内联依赖脚本
+  - CMAKE 检测到 `if()` 语句中的额外空格问题
 
 ---
 
