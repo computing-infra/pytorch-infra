@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-### 已迁移规则 (6个)
+### 已迁移规则 (10个)
 
 | Linter | 功能 | 状态 |
 |--------|------|------|
@@ -14,6 +14,10 @@
 | SPACES | 尾部空格检查 | ✅ 已完成 |
 | TABS | Tab 检查（应使用空格） | ✅ 已完成 |
 | NOBREAKSPACE | 非中断空格检查 | ✅ 已完成 |
+| RUFF | Python 综合检查 + 格式化 | ✅ 第一批 |
+| CODESPELL | 拼写错误检查 | ✅ 第一批 |
+| SHELLCHECK | Shell 脚本检查 | ✅ 第一批 |
+| ACTIONLINT | GitHub Actions 检查 | ✅ 第一批 |
 
 ---
 
@@ -176,7 +180,7 @@
 | 批次 | 状态 | 开始时间 | 完成时间 |
 |------|------|----------|----------|
 | 已完成 (6个基础规则) | ✅ 完成 | 2026-03-31 | 2026-03-31 |
-| 第一批 (通用工具) | ⏳ 待开始 | - | - |
+| 第一批 (通用工具) | ✅ 完成 | 2026-03-31 | 2026-03-31 |
 | 第二批 (Python实践) | ⏳ 待开始 | - | - |
 | 第三批 (C++实践) | ⏳ 待开始 | - | - |
 | 第四批 (构建系统) | ⏳ 待开始 | - | - |
@@ -188,13 +192,14 @@
 
 迁移完成后需要维护的配置文件：
 
-| 文件 | 用途 |
-|------|------|
-| `lint-config/.lintrunner.toml` | Linter 主配置 |
-| `lint-config/.clang-format` | C++ 格式化配置 |
-| `lint-config/ruff.toml` | Ruff 配置（新增） |
-| `lint-config/.cmakelintrc` | CMake lint 配置（新增） |
-| `lint-config/codespell.toml` | Codespell 配置（新增） |
+| 文件 | 用途 | 状态 |
+|------|------|------|
+| `lint-config/.lintrunner.toml` | Linter 主配置 | ✅ 已创建 |
+| `lint-config/.clang-format` | C++ 格式化配置 | ✅ 已创建 |
+| `lint-config/ruff.toml` | Ruff 配置 | ✅ 已创建 |
+| `lint-config/dictionary.txt` | Codespell 拼写字典 | ✅ 已创建 |
+| `lint-config/.cmakelintrc` | CMake lint 配置 | ⏳ 待创建 |
+| `lint-config/codespell.toml` | Codespell 配置 | ⏳ 待创建 | |
 
 ---
 

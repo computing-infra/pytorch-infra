@@ -153,3 +153,106 @@ command = [
     '--',
     '@{{PATHSFILE}}'
 ]
+# =====================================================
+# 第一批迁移：通用代码质量工具
+# =====================================================
+
+# Ruff - Python 综合检查 + 格式化（替代 flake8 + isort）
+[[linter]]
+code = 'RUFF'
+include_patterns = [
+    'torch_npu/**/*.py',
+    'torch_npu/**/*.pyi',
+    'test/**/*.py',
+    'ci/**/*.py',
+    'examples/**/*.py',
+    'setup.py',
+    'build_libtorch_npu.py',
+]
+exclude_patterns = [
+    'third_party/**',
+    '**/generated/**',
+    '**/__pycache__/**',
+]
+command = [
+    'uv',
+    'run',
+    '--script',
+    'lint-tools/adapters/ruff_linter.py',
+    '--config=lint-config/ruff.toml',
+    '--show-disable',
+    '--',
+    '@{{PATHSFILE}}'
+]
+is_formatter = true
+
+# Codespell - 拼写错误检查
+[[linter]]
+code = 'CODESPELL'
+include_patterns = ['**']
+exclude_patterns = [
+    'third_party/**',
+    '**/*.png',
+    '**/*.gz',
+    '**/*.zip',
+    '**/*.whl',
+    '**/*.patch',
+    '**/*.pdf',
+    '**/*.so',
+    '**/*.bin',
+    '**/*.pt',
+    '**/*.pth',
+    '**/__pycache__/**',
+]
+command = [
+    'uv',
+    'run',
+    '--script',
+    'lint-tools/adapters/codespell_linter.py',
+    '--',
+    '@{{PATHSFILE}}'
+]
+is_formatter = true
+
+# ShellCheck - Shell 脚本检查
+[[linter]]
+code = 'SHELLCHECK'
+include_patterns = [
+    '**/*.sh',
+    '**/*.bash',
+]
+exclude_patterns = [
+    'third_party/**',
+]
+command = [
+    'uv',
+    'run',
+    '--script',
+    'lint-tools/adapters/shellcheck_linter.py',
+    '--',
+    '@{{PATHSFILE}}'
+]
+
+# Actionlint - GitHub Actions workflow 检查
+[[linter]]
+code = 'ACTIONLINT'
+include_patterns = [
+    '.github/workflows/*.yml',
+    '.github/workflows/*.yaml',
+]
+command = [
+    'python3',
+    'lint-tools/adapters/actionlint_linter.py',
+    '--binary=.lintbin/actionlint',
+    '--',
+    '@{{PATHSFILE}}'
+]
+init_command = [
+    'python3',
+    'lint-tools/adapters/s3_init.py',
+    '--config-json=lint-tools/adapters/s3_init_config.json',
+    '--linter=actionlint',
+    '--dry-run=0',
+    '--output-dir=.lintbin',
+    '--output-name=actionlint',
+]

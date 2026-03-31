@@ -10,6 +10,10 @@
 | `newlines_linter.py` | 换行符检查（确保使用 LF） |
 | `clangformat_linter.py` | C++ 代码格式化检查 |
 | `flake8_linter.py` | Python PEP8 代码检查 |
+| `ruff_linter.py` | Python 综合检查 + 格式化（替代 flake8 + isort） |
+| `codespell_linter.py` | 拼写错误检查 |
+| `shellcheck_linter.py` | Shell 脚本检查 |
+| `actionlint_linter.py` | GitHub Actions workflow 检查 |
 | `s3_init.py` | 从 S3 下载 clang-format/clang-tidy 预编译二进制 |
 | `s3_init_config.json` | S3 二进制下载配置（URL 和 SHA256 哈希） |
 

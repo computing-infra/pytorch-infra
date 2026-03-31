@@ -1,0 +1,50 @@
+# Ruff configuration for Ascend/pytorch
+# Based on PyTorch's ruff config
+
+line-length = 88
+src = ["torch_npu", "test", "ci", "examples"]
+
+extend-exclude = [
+    "third_party",
+    "**/generated/**",
+    "**/__pycache__/**",
+]
+
+[format]
+docstring-code-format = true
+quote-style = "double"
+
+[lint]
+ignore = [
+    "E402",  # Module level import not at top
+    "E501",  # Line too long (use B950 instead)
+    "E741",  # Ambiguous variable name
+    "F405",  # Name may be undefined from star imports
+    "B007",  # Loop control variable not used within loop body
+    "B008",  # Do not perform function calls in argument defaults
+    "B018",  # Useless expression
+    "B023",  # Function definition does not bind loop variable
+    "B028",  # No explicit stacklevel keyword argument
+    "C408",  # Unnecessary dict call - rewrite as literal
+    "SIM102",  # Use single if instead of nested if
+    "SIM105",  # Use contextlib.suppress
+    "SIM108",  # Use ternary operator instead of if-else-block
+    "SIM117",  # Multiple with statements
+    "SIM300",  # Yoda condition
+]
+
+select = [
+    "B",      # flake8-bugbear
+    "B904",   # Re-raised error without from keyword
+    "C4",     # flake8-comprehensions
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "G",      # flake8-logging-format
+    "I",      # isort
+    "SIM",    # flake8-simplify
+    "W",      # pycodestyle warnings
+    "UP",     # pyupgrade
+]
+
+[lint.isort]
+known-first-party = ["torch_npu", "torch"]
