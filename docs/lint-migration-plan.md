@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-### 已迁移规则 (17个)
+### 已迁移规则 (20个)
 
 | Linter | 功能 | 状态 |
 |--------|------|------|
@@ -25,6 +25,9 @@
 | C10_NODISCARD | 检查已弃用的 C10_NODISCARD 宏 | ✅ 第三批 |
 | RAWTHROW | 禁止直接 throw 语句 | ✅ 第三批 |
 | INCLUDE | 检查 #include 格式 | ✅ 第三批 |
+| CMAKE | CMake 文件检查 | ✅ 第四批 |
+| PYPROJECT | pyproject.toml 检查 | ✅ 第四批 |
+| CMAKE_MINIMUM_REQUIRED | CMake/pyproject 最低版本 | ✅ 第四批 |
 
 **说明**：
 - FLAKE8 已被 RUFF 替代（RUFF 包含 E+F 规则，覆盖 FLAKE8 功能）
@@ -123,17 +126,106 @@
 
 **预计完成时间**：1 天
 
-| Linter | 功能 | 迁移难度 | 价值 |
-|--------|------|----------|------|
-| **CMAKE** | CMake 文件检查 | 中 | ⭐⭐⭐⭐ |
-| **CMAKE_MINIMUM_REQUIRED** | CMake/pyproject 最低版本 | 中 | ⭐⭐⭐ |
-| **PYPROJECT** | pyproject.toml 检查 | 低 | ⭐⭐⭐ |
+#### 规则详细分析
 
-**迁移步骤**：
+| Linter | 功能 | 迁移难度 | 价值 | 改造需求 |
+|--------|------|----------|------|----------|
+| **CMAKE** | CMake 文件检查 | 中 | ⭐⭐⭐⭐ | 低 - 仅调整 patterns |
+| **CMAKE_MINIMUM_REQUIRED** | CMake/pyproject 最低版本 | 中 | ⭐⭐⭐ | 高 - 移除 PyTorch 内部依赖 |
+| **PYPROJECT** | pyproject.toml 检查 | 低 | ⭐⭐⭐ | 无 - 直接复制 |
 
-1. 复制 cmake 相关 linter 脚本
-2. 添加 `.cmakelintrc` 配置文件
-3. 更新 `.lintrunner.toml`
+#### 1. CMAKE 规则分析
+
+**PyTorch 配置**：
+```toml
+[[linter]]
+code = 'CMAKE'
+include_patterns = ["**/*.cmake", "**/*.cmake.in", "**/CMakeLists.txt"]
+exclude_patterns = [
+    'cmake/Modules/**',
+    'cmake/Modules_CUDA_fix/**',
+    'cmake/Caffe2Config.cmake.in',
+    'aten/src/ATen/ATenCONFIG.cmake.in',
+    'cmake/TorchConfig.cmake.in',
+    'cmake/TorchConfigVersion.cmake.in',
+    'cmake/cmake_uninstall.cmake.i',
+    'fb/**',
+    '**/fb/**',
+]
+command = ['uv', 'run', '--script', 'tools/linter/adapters/cmake_linter.py', '--config=.cmakelintrc', '--', '@{{PATHSFILE}}']
+```
+
+**Ascend/pytorch 结构**：
+- 主 CMakeLists.txt 在根目录，使用 cmake_minimum_required(VERSION 3.18)
+- 子目录 CMakeLists.txt：`torch_npu/csrc/**/*.cmake`, `examples/**/*.cmake`, `test/cpp/**/*.cmake`
+- 第三方依赖：`third_party/**/*.cmake`（需排除）
+
+**改造方案**：
+- 复制 `cmake_linter.py` 脚本
+- 创建 `.cmakelintrc` 配置文件（沿用 PyTorch 配置）
+- 调整 exclude_patterns：排除 `third_party/**`, `torch_npu/csrc/aten/**`
+
+#### 2. PYPROJECT 规则分析
+
+**PyTorch 配置**：
+```toml
+[[linter]]
+code = 'PYPROJECT'
+include_patterns = ["**/pyproject.toml"]
+command = ['uv', 'run', '--script', 'tools/linter/adapters/pyproject_linter.py', '--', '@{{PATHSFILE}}']
+```
+
+**功能**：
+- 检查 `project.requires-python` 是否为有效 Python 版本范围
+- 检查 `project.classifiers` 是否为字符串数组且无重复
+
+**Ascend/pytorch 结构**：
+- 无 pyproject.toml 文件（使用 setup.py）
+
+**改造方案**：
+- 直接复制脚本，无需改造
+- 实际运行时不会检查任何文件（无匹配）
+
+#### 3. CMAKE_MINIMUM_REQUIRED 规则分析
+
+**PyTorch 配置**：
+```toml
+[[linter]]
+code = 'CMAKE_MINIMUM_REQUIRED'
+include_patterns = ["**/pyproject.toml", "**/CMakeLists.txt", "**/CMakeLists.txt.in", "**/*.cmake", "**/*.cmake.in", "**/*requirements*.txt", "**/*requirements*.in"]
+command = ['uv', 'run', '--script', 'tools/linter/adapters/cmake_minimum_required_linter.py', '--', '@{{PATHSFILE}}']
+```
+
+**关键依赖问题**：
+```python
+# 原脚本依赖 PyTorch 内部模块
+from tools.setup_helpers.env import CMAKE_MINIMUM_VERSION_STRING
+CMAKE_MINIMUM_VERSION_STRING = "3.27"  # PyTorch 要求版本
+```
+
+**Ascend/pytorch CMake 版本**：
+- 根目录 CMakeLists.txt：`cmake_minimum_required(VERSION 3.18)`
+- 其他 CMakeLists.txt：无显式版本要求
+
+**改造方案**：
+- 复制脚本并移除对 `tools.setup_helpers.env` 的依赖
+- 硬编码 `CMAKE_MINIMUM_VERSION = "3.18"`（Ascend/pytorch 要求版本）
+- 调整检查逻辑：只检查根目录 CMakeLists.txt 的版本一致性
+- 排除 `third_party/**` 目录
+
+#### 迁移步骤
+
+1. 复制 linter 适配器脚本到 `lint-tools/adapters/`
+   - `cmake_linter.py`（直接复制）
+   - `pyproject_linter.py`（直接复制）
+   - `cmake_minimum_required_linter.py`（改造后复制）
+
+2. 创建配置文件
+   - `lint-config/.cmakelintrc`（沿用 PyTorch 配置）
+
+3. 更新 `lint-config/.lintrunner.toml` 添加规则
+   - 调整 include/exclude patterns 适配 Ascend/pytorch
+
 4. 测试验证
 
 ---
@@ -196,7 +288,7 @@
 | 第一批 (通用工具) | ✅ 完成 | 2026-03-31 | 2026-03-31 |
 | 第二批 (Python实践) | ✅ 完成 | 2026-03-31 | 2026-03-31 |
 | 第三批 (C++实践) | ✅ 完成 (除CLANGTIDY) | 2026-03-31 | 2026-03-31 |
-| 第四批 (构建系统) | ⏳ 待开始 | - | - |
+| 第四批 (构建系统) | ✅ 完成 | 2026-03-31 | 2026-03-31 |
 | 第五批 (测试相关) | ⏳ 待开始 | - | - |
 
 **验证记录**：
@@ -217,7 +309,7 @@
 | `lint-config/.clang-format` | C++ 格式化配置 | ✅ 已创建 |
 | `lint-config/ruff.toml` | Ruff 配置 | ✅ 已创建 |
 | `lint-config/dictionary.txt` | Codespell 拼写字典 | ✅ 已创建 |
-| `lint-config/.cmakelintrc` | CMake lint 配置 | ⏳ 待创建 |
+| `lint-config/.cmakelintrc` | CMake lint 配置 | ✅ 已创建 |
 | `lint-config/codespell.toml` | Codespell 配置 | ⏳ 待创建 | |
 
 ---
@@ -228,3 +320,66 @@
 - Lintrunner 文档：https://github.com/suo/lintrunner
 - Ruff 文档：https://docs.astral.sh/ruff/
 - Clang-Tidy 文档：https://clang.llvm.org/extra/clang-tidy/
+
+---
+
+## 迁移套路总结
+
+### 标准迁移流程
+
+```
+1. 分析 PyTorch 原规则
+   ├── 查看 .lintrunner.toml 中的规则配置
+   ├── 查看 linter 适配器脚本实现
+   └── 查看相关配置文件（如 .cmakelintrc）
+
+2. 分析 Ascend/pytorch 结构
+   ├── 检查目标文件是否存在（include_patterns）
+   ├── 检查需要排除的目录（third_party, generated 等）
+   └── 检查是否有 PyTorch 内部依赖
+
+3. 确定改造需求
+   ├── 低改造：仅需调整 include/exclude patterns
+   ├── 中改造：需要调整检查逻辑或参数
+   ├── 高改造：需要移除 PyTorch 内部依赖或重写部分逻辑
+   └── 不迁移：PyTorch 特有功能，Ascend/pytorch 不适用
+
+4. 执行迁移
+   ├── 复制 linter 适配器脚本到 lint-tools/adapters/
+   ├── 创建/修改配置文件
+   ├── 更新 lint-config/.lintrunner.toml
+   └── 本地测试验证
+
+5. CI 验证
+   ├── 触发 workflow 运行
+   ├── 检查 lint 报告
+   ├── 记录验证结果
+   └── 更新文档
+```
+
+### 关键改造模式
+
+| 改造类型 | 说明 | 示例 |
+|---------|------|------|
+| **Patterns 调整** | 适配目标仓库目录结构 | `include_patterns = ['torch_npu/**/*.py']` |
+| **依赖移除** | 移除 PyTorch 内部模块依赖 | `CMAKE_MINIMUM_REQUIRED` 移除 `tools.setup_helpers.env` |
+| **参数调整** | 调整检查参数或阈值 | CMake 版本从 3.27 改为 3.18 |
+| **规则合并** | 合并相似规则减少冗余 | RUFF 替代 FLAKE8 |
+| **规则排除** | 不迁移 PyTorch 特有规则 | CUDA 相关规则不迁移 |
+
+### 文件命名规范
+
+| 类型 | 路径 | 说明 |
+|------|------|------|
+| Linter 脚本 | `lint-tools/adapters/<name>_linter.py` | 统一使用 `_linter.py` 后缀 |
+| 配置文件 | `lint-config/<config_file>` | 所有配置文件集中管理 |
+| 主配置 | `lint-config/.lintrunner.toml` | lintrunner 主配置文件 |
+
+### 验证检查清单
+
+- [ ] include_patterns 是否匹配目标文件
+- [ ] exclude_patterns 是否排除第三方/生成代码
+- [ ] 脚本依赖是否已移除/替换
+- [ ] 配置文件是否已创建
+- [ ] workflow 是否正常运行
+- [ ] lint 报告是否生成

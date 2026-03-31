@@ -431,3 +431,71 @@ command = [
     '--',
     '@{{PATHSFILE}}'
 ]
+
+# =====================================================
+# 第四批迁移：构建系统检查
+# =====================================================
+
+# CMAKE - CMake 文件格式检查
+[[linter]]
+code = 'CMAKE'
+include_patterns = [
+    '**/*.cmake',
+    '**/*.cmake.in',
+    '**/CMakeLists.txt',
+]
+exclude_patterns = [
+    'third_party/**',
+    '**/generated/**',
+]
+command = [
+    'uv',
+    'run',
+    '--script',
+    'lint-tools/adapters/cmake_linter.py',
+    '--config=lint-config/.cmakelintrc',
+    '--',
+    '@{{PATHSFILE}}',
+]
+
+# PYPROJECT - pyproject.toml 检查
+[[linter]]
+code = 'PYPROJECT'
+include_patterns = [
+    '**/pyproject.toml',
+]
+exclude_patterns = [
+    'third_party/**',
+]
+command = [
+    'uv',
+    'run',
+    '--script',
+    'lint-tools/adapters/pyproject_linter.py',
+    '--',
+    '@{{PATHSFILE}}',
+]
+
+# CMAKE_MINIMUM_REQUIRED - CMake/pyproject 最低版本检查
+[[linter]]
+code = 'CMAKE_MINIMUM_REQUIRED'
+include_patterns = [
+    '**/pyproject.toml',
+    '**/CMakeLists.txt',
+    '**/CMakeLists.txt.in',
+    '**/*.cmake',
+    '**/*.cmake.in',
+    '**/*requirements*.txt',
+    '**/*requirements*.in',
+]
+exclude_patterns = [
+    'third_party/**',
+]
+command = [
+    'uv',
+    'run',
+    '--script',
+    'lint-tools/adapters/cmake_minimum_required_linter.py',
+    '--',
+    '@{{PATHSFILE}}',
+]

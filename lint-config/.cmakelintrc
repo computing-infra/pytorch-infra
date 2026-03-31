@@ -1,0 +1,19 @@
+# CMake lint configuration for Ascend/pytorch
+# Based on PyTorch's .cmakelintrc
+#
+# Filters explanation:
+# -convention/filename: Allow CMakeLists.txt (not cmake_convention)
+# -linelength: Allow lines longer than 80 characters
+# -package/consistency: Allow inconsistent package naming
+# -readability/logic: Allow various logic patterns
+# -readability/mixedcase: Allow mixed case variables
+# -readability/wonkycase: Allow unusual casing
+# -syntax: Allow various syntax patterns
+# -whitespace/eol: Disable end-of-line whitespace check (handled by SPACES linter)
+# +whitespace/extra: Check for extra whitespace
+# -whitespace/indent: Allow various indentation
+# -whitespace/mismatch: Allow whitespace mismatches
+# -whitespace/newline: Allow various newline patterns
+# -whitespace/tabs: Allow tabs (handled by TABS linter)
+
+filter=-convention/filename,-linelength,-package/consistency,-readability/logic,-readability/mixedcase,-readability/wonkycase,-syntax,-whitespace/eol,+whitespace/extra,-whitespace/indent,-whitespace/mismatch,-whitespace/newline,-whitespace/tabs
