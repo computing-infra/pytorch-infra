@@ -105,7 +105,7 @@ jobs:
 
           # 检查 lib64 目录
           echo "=== Checking lib64 ==="
-          ls -la $CANN_PATH/lib64/ 2>&1 | head -20
+          ls $CANN_PATH/lib64/ 2>&1 | wc -l
           echo "=== lib64 check done ==="
 
           export LD_LIBRARY_PATH=$CANN_PATH/lib64:$LD_LIBRARY_PATH
