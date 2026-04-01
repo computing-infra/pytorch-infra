@@ -10,42 +10,14 @@
 
 | 项目 | x86 版本 | ARM 版本 |
 |------|----------|----------|
-| Runner | `ubuntu-22.04` | `npu-910b`（自注册） |
+| Runner | `ubuntu-22.04` | `[self-hosted, npu-910b]` |
 | 运行方式 | 虚机直接运行 | Docker 容器 |
-| Docker 镜像 | 无 | `quay.io/kerer/pytorch:arm-manylinux2014-nightly-20260326055807` |
+| Docker 镜像 | 无 | `swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/manylinux2_28_aarch64-builder:npu-20241231` |
 | Python 版本 | 3.11（动态安装） | 3.11（镜像预装） |
-| 预装 PyTorch | 无 | 2.1.0（需升级到 nightly） |
+| 预装 PyTorch | 无 | 需升级到 nightly |
 
-### Docker 镜像说明
-
-镜像基于 `quay.io/pypa/manylinux2014_aarch64`，预装：
-
-- **Python 版本**：3.9.18、3.10.13、3.11.6
-- **预装包**：pyyaml、torch==2.1.0、numpy
-- **pip 配置**：华为云镜像源
-
-镜像 Dockerfile 关键内容：
-
-```dockerfile
-FROM quay.io/pypa/manylinux2014_aarch64:2023-10-07-c1e05d1
-
-# Set pip
-RUN cd /usr/local/bin \
-    && ln -s /opt/_internal/cpython-3.9.18/bin/pip3.9 pip3.9 \
-    && ln -s /opt/_internal/cpython-3.10.13/bin/pip3.10 pip3.10 \
-    && ln -s /opt/_internal/cpython-3.11.6/bin/pip3.11 pip3.11 \
-    && ln -s python3.9 python3
-
-# Set pip source (Huawei cloud mirror)
-RUN mkdir /root/.pip \
-    && echo "[global]" > /root/.pip/pip.conf \
-    && echo "index-url=https://mirrors.huaweicloud.com/repository/pypi/simple" >> /root/.pip/pip.conf
-
-# Install torch 2.1.0 for each Python version
-RUN pip3.11 install pyyaml torch==2.1.0 numpy==1.23.2
-
-WORKDIR /home
-```
+> **变更记录**：原计划使用 `quay.io/kerer/pytorch:arm-manylinux2014-nightly` 镜像，
+> 因 glibc 版本不兼容 Node.js 20 actions，已切换到 manylinux2_28 镜像。
 
 ### 构建流程
 
@@ -131,6 +103,74 @@ name: torch_npu-wheel-arm-${{ github.run_number }}
 2. 手动触发测试构建
 3. 根据构建结果调整配置（如并行编译数、缓存大小等）
 4. 如需长期维护，可考虑统一 x86/ARM workflow 使用矩阵构建
+
+## 验证执行记录
+
+### 2026-04-01 执行进展
+
+#### 问题 1：Workflow 未触发
+
+**现象**：推送代码后 workflow 未执行（0s 失败）
+
+**原因**：self-hosted runner 使用 `runs-on` 必须包含 `self-hosted` 标签
+
+**解决**：
+```yaml
+# 错误配置
+runs-on: npu-910b
+
+# 正确配置
+runs-on: [self-hosted, npu-910b]
+```
+
+#### 问题 2：Docker 权限不足
+
+**现象**：
+```
+permission denied while trying to connect to the Docker daemon socket
+at unix:///var/run/docker.sock
+```
+
+**原因**：runner 用户 `ghrunner` 未加入 docker 组，或 runner 进程启动时未加载新组
+
+**解决**：
+```bash
+# 添加用户到 docker 组
+sudo usermod -aG docker ghrunner
+
+# 重启 runner 进程（必须，否则进程不会加载新组）
+cd /home/ghrunner/actions-runner
+./run.sh
+```
+
+#### 问题 3：glibc 版本不兼容
+
+**现象**：
+```
+/__e/node20/bin/node: /lib64/libc.so.6: version `GLIBC_2.28' not found
+```
+
+**原因**：manylinux2014 镜像 glibc 版本为 2.17，Node.js 20 需要 glibc 2.28+
+
+**解决**：切换到 manylinux2_28 镜像
+
+```yaml
+# 原镜像（不兼容）
+image: quay.io/kerer/pytorch:arm-manylinux2014-nightly-20260326055807
+
+# 新镜像（兼容）
+image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/manylinux2_28_aarch64-builder:npu-20241231
+```
+
+#### 当前状态
+
+| Run ID | 状态 | 失败原因 |
+|--------|------|----------|
+| 23829752650 | ❌ 失败 | 网络超时，无法连接 github.com:443 |
+| 23829557682 | ❌ 失败 | glibc 版本不兼容（已解决） |
+| 23828515786 | ❌ 失败 | Docker 权限不足（已解决） |
+
+**下一步**：排查容器内网络访问问题
 
 ## 参考文件
 
