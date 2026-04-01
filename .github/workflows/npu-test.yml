@@ -14,7 +14,7 @@ jobs:
     runs-on: [self-hosted, npu-910b]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
-      options: --user root --device /dev/davinci4 --device /dev/davinci_manager --device /dev/devmm_svm --device /dev/hisi_hdc -v /usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi -v /usr/local/Ascend/driver:/usr/local/Ascend/driver -v /usr/local/Ascend/firmware:/usr/local/Ascend/firmware
+      options: --user root --device /dev/davinci4 --device /dev/davinci_manager --device /dev/devmm_svm --device /dev/hisi_hdc -v /usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi -v /usr/local/Ascend/driver:/usr/local/Ascend/driver -v /usr/local/Ascend/firmware:/usr/local/Ascend/firmware -v /usr/local/Ascend/cann:/usr/local/Ascend/cann -v /usr/local/Ascend/nnal:/usr/local/Ascend/nnal
     env:
       PYTHON_VERSION: '3.11'
       DOCKER_IMAGE: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
@@ -92,6 +92,10 @@ jobs:
 
       - name: Verify NPU availability
         run: |
+          # 加载 CANN 环境变量
+          source /usr/local/Ascend/cann/set_env.sh
+          source /usr/local/Ascend/nnal/atb/set_env.sh
+
           PYTHON=python${{ env.PYTHON_VERSION }}
           $PYTHON -c "import torch; import torch_npu; print(f'torch: {torch.__version__}'); print(f'torch_npu: {torch_npu.__version__}'); print(f'NPU available: {torch.npu.is_available()}'); print(f'NPU count: {torch.npu.device_count()}'); print(f'NPU name: {torch.npu.get_device_name(0) if torch.npu.is_available() else \"N/A\"}')"
 
@@ -111,6 +115,10 @@ jobs:
       - name: Run core tests on NPU
         id: run_tests
         run: |
+          # 加载 CANN 环境变量
+          source /usr/local/Ascend/cann/set_env.sh
+          source /usr/local/Ascend/nnal/atb/set_env.sh
+
           PYTHON=python${{ env.PYTHON_VERSION }}
           cd official_pytorch
 
