@@ -24,6 +24,8 @@ jobs:
       - name: Checkout pytorch-infra (via proxy)
         shell: bash
         run: |
+          # 清理工作目录
+          rm -rf * .[!.]* 2>/dev/null || true
           git clone --depth=1 https://gh-proxy.test.osinfra.cn/https://github.com/computing-infra/pytorch-infra.git .
           echo "Repository cloned successfully"
 
