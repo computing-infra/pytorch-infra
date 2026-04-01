@@ -1,0 +1,214 @@
+name: NPU Test (PyTorch Official Tests)
+
+on:
+  push:
+    paths:
+      - '.github/workflows/npu-test.yml'
+  schedule:
+    - cron: '0 23 * * *'  # UTC 23:00（北京时间次日 07:00），构建后 1 小时
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run PyTorch Tests on NPU
+    runs-on: [self-hosted, npu-910b]
+    container:
+      image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
+      options: --user root
+        --device /dev/davinci4
+        --device /dev/davinci_manager
+        --device /dev/devmm_svm
+        --device /dev/hisi_hdc
+        -v /usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi
+        -v /usr/local/Ascend/driver:/usr/local/Ascend/driver
+        -v /usr/local/Ascend/firmware:/usr/local/Ascend/firmware
+    env:
+      PYTHON_VERSION: '3.11'
+      DOCKER_IMAGE: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
+      PYTORCH_TESTING_DEVICE_ONLY_FOR: 'privateuseone'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup cache directories
+        run: |
+          mkdir -p ~/.cache/pip
+          chmod -R 777 ~/.cache
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-arm-py${{ env.PYTHON_VERSION }}-test
+          restore-keys: |
+            pip-arm-py${{ env.PYTHON_VERSION }}-
+
+      - name: Get latest successful build run ID
+        id: get_build
+        run: |
+          # 获取最近一次成功构建的 run ID
+          RUN_ID=$(gh run list --repo computing-infra/pytorch-infra \
+            --workflow=nightly-build-arm.yml \
+            --status=success \
+            --limit=1 \
+            --json databaseId \
+            -q '.[0].databaseId')
+
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No successful build found"
+            exit 1
+          fi
+
+          echo "run_id=${RUN_ID}" >> $GITHUB_OUTPUT
+          echo "Found successful build run: ${RUN_ID}"
+
+      - name: Download wheel artifact
+        run: |
+          RUN_ID="${{ steps.get_build.outputs.run_id }}"
+          gh run download ${RUN_ID} --repo computing-infra/pytorch-infra \
+            --pattern "torch_npu-wheel-arm-*" \
+            --dir wheel_artifact
+
+          # 查找 wheel 文件
+          WHL=$(find wheel_artifact -name "*.whl" | head -1)
+          if [ -z "$WHL" ]; then
+            echo "::error::No wheel file found in artifact"
+            exit 1
+          fi
+          echo "Downloaded wheel: ${WHL}"
+          echo "WHL_PATH=${WHL}" >> $GITHUB_ENV
+
+      - name: Install PyTorch nightly and torch_npu
+        id: install
+        run: |
+          PYTHON=python${{ env.PYTHON_VERSION }}
+          PIP=pip${{ env.PYTHON_VERSION }}
+
+          export PIP_CACHE_DIR=~/.cache/pip
+
+          # 安装 PyTorch nightly（CPU 版，aarch64）
+          $PIP install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
+          TORCH_VER=$($PYTHON -c "import torch; print(torch.__version__)")
+          echo "torch_version=${TORCH_VER}" >> $GITHUB_OUTPUT
+          echo "PyTorch nightly version: ${TORCH_VER}"
+
+          # 安装 torch_npu wheel
+          $PIP install "${{ env.WHL_PATH }}"
+          echo "torch_npu installed"
+
+          # 验证 NPU 可用性
+          $PYTHON -c "
+import torch
+import torch_npu
+print(f'torch version: {torch.__version__}')
+print(f'torch_npu version: {torch_npu.__version__}')
+print(f'NPU available: {torch.npu.is_available()}')
+print(f'NPU count: {torch.npu.device_count()}')
+if torch.npu.is_available():
+    print(f'NPU name: {torch.npu.get_device_name(0)}')
+"
+
+      - name: Clone official PyTorch repository
+        id: clone_pytorch
+        run: |
+          git clone --depth=1 https://github.com/pytorch/pytorch.git official_pytorch
+          cd official_pytorch
+          COMMIT=$(git rev-parse HEAD)
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          COMMIT_DATE=$(git log -1 --format='%ci')
+          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+          echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
+          echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
+          echo "PyTorch official commit: ${COMMIT} (${COMMIT_DATE})"
+
+      - name: Run core tests on NPU
+        id: run_tests
+        run: |
+          PYTHON=python${{ env.PYTHON_VERSION }}
+          cd official_pytorch
+
+          # 设置测试环境变量
+          export PYTORCH_TESTING_DEVICE_ONLY_FOR="privateuseone"
+
+          # 创建测试日志目录
+          mkdir -p /tmp/test_logs
+
+          # 运行核心测试（分阶段执行，便于定位问题）
+          TEST_RESULT=0
+
+          # 1. 基础张量测试 (test_torch)
+          echo "=== Running test_torch ===" | tee /tmp/test_logs/test_torch.log
+          $PYTHON test/run_test.py --include test_torch 2>&1 | tee -a /tmp/test_logs/test_torch.log
+          if [ $? -ne 0 ]; then
+            echo "test_torch: FAILED"
+            TEST_RESULT=1
+          else
+            echo "test_torch: PASSED"
+          fi
+
+          # 2. NN 模块测试 (test_nn)
+          echo "=== Running test_nn ===" | tee /tmp/test_logs/test_nn.log
+          $PYTHON test/run_test.py --include test_nn 2>&1 | tee -a /tmp/test_logs/test_nn.log
+          if [ $? -ne 0 ]; then
+            echo "test_nn: FAILED"
+            TEST_RESULT=1
+          else
+            echo "test_nn: PASSED"
+          fi
+
+          # 3. 自动微分测试 (test_autograd)
+          echo "=== Running test_autograd ===" | tee /tmp/test_logs/test_autograd.log
+          $PYTHON test/run_test.py --include test_autograd 2>&1 | tee -a /tmp/test_logs/test_autograd.log
+          if [ $? -ne 0 ]; then
+            echo "test_autograd: FAILED"
+            TEST_RESULT=1
+          else
+            echo "test_autograd: PASSED"
+          fi
+
+          # 4. 算子测试 (test_ops) - 可能耗时较长
+          echo "=== Running test_ops ===" | tee /tmp/test_logs/test_ops.log
+          $PYTHON test/run_test.py --include test_ops 2>&1 | tee -a /tmp/test_logs/test_ops.log
+          if [ $? -ne 0 ]; then
+            echo "test_ops: FAILED"
+            TEST_RESULT=1
+          else
+            echo "test_ops: PASSED"
+          fi
+
+          echo "test_result=${TEST_RESULT}" >> $GITHUB_OUTPUT
+          exit ${TEST_RESULT}
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ github.run_number }}
+          path: /tmp/test_logs
+          if-no-files-found: warn
+
+      - name: Test summary
+        if: always()
+        run: |
+          TEST_RESULT="${{ steps.run_tests.outputs.test_result }}"
+          if [ "${TEST_RESULT}" = "0" ]; then
+            STATUS_ICON="✅ ALL PASSED"
+          else
+            STATUS_ICON="❌ SOME FAILED"
+          fi
+
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## PyTorch Official Tests on NPU
+
+          | 项目 | 详情 |
+          |------|------|
+          | 测试时间 | $(date -u '+%Y-%m-%d %H:%M UTC') |
+          | Docker 镜像 | \`${{ env.DOCKER_IMAGE }}\` |
+          | PyTorch Nightly | \`${{ steps.install.outputs.torch_version }}\` |
+          | PyTorch 官方 Commit | [\`${{ steps.clone_pytorch.outputs.commit_short }}\`](https://github.com/pytorch/pytorch/commit/${{ steps.clone_pytorch.outputs.commit }}) |
+          | 构建来源 Run ID | ${{ steps.get_build.outputs.run_id }} |
+          | 测试结果 | ${STATUS_ICON} |
+
+          > 查看 test-logs artifact 获取详细测试输出
+          EOF
