@@ -24,18 +24,11 @@ jobs:
       options: --user root
     env:
       PYTHON_VERSION: '3.11'
+      DOCKER_IMAGE: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-arm-py${{ env.PYTHON_VERSION }}-torch-nightly
-          restore-keys: |
-            pip-arm-py${{ env.PYTHON_VERSION }}-
 
       - name: Upgrade PyTorch to nightly (CPU, aarch64)
         id: install_torch
@@ -72,15 +65,6 @@ jobs:
           echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
           echo "Ascend/pytorch commit: ${COMMIT} (${COMMIT_DATE})"
 
-      - name: Restore ccache
-        id: ccache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.ccache
-          key: ccache-arm-py${{ env.PYTHON_VERSION }}-${{ steps.clone_repo.outputs.commit }}
-          restore-keys: |
-            ccache-arm-py${{ env.PYTHON_VERSION }}-
-
       - name: Install Python build dependencies
         run: |
           PIP=pip${{ env.PYTHON_VERSION }}
@@ -93,15 +77,6 @@ jobs:
         run: |
           PYTHON=python${{ env.PYTHON_VERSION }}
           cd ascend_pytorch
-          mkdir -p ~/.ccache
-          ccache -M 5G
-          ccache -z || true
-          export CC="ccache gcc"
-          export CXX="ccache g++"
-          export CCACHE_BASEDIR="${PWD}"
-          export CCACHE_DIR="${HOME}/.ccache"
-          export CCACHE_COMPRESS=1
-          export CCACHE_MAXSIZE=5G
 
           # 根据 runner CPU 核心数设置并行编译数
           export MAX_JOBS=$(nproc)
@@ -111,10 +86,6 @@ jobs:
           export BUILD_WITHOUT_SHA=1
           $PYTHON setup.py build bdist_wheel 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
-          CCACHE_HIT_RATE=$(ccache -s | awk -F'[()]' '/Hits:/ {print $2; exit}')
-          [ -n "${CCACHE_HIT_RATE}" ] || CCACHE_HIT_RATE="N/A"
-          echo "hit_rate=${CCACHE_HIT_RATE}" >> $GITHUB_OUTPUT
-          ccache -s || true
           echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
           if [ ${BUILD_STATUS} -eq 0 ]; then
             WHL=$(ls dist/*.whl 2>/dev/null | head -1)
@@ -122,13 +93,6 @@ jobs:
             echo "Build succeeded: ${WHL}"
           fi
           exit ${BUILD_STATUS}
-
-      - name: Save ccache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.ccache
-          key: ccache-arm-py${{ env.PYTHON_VERSION }}-${{ steps.clone_repo.outputs.commit }}
 
       - name: Upload build log
         if: always()
@@ -166,7 +130,6 @@ jobs:
           | PyTorch Nightly | \`${{ steps.install_torch.outputs.version }}\` |
           | Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |
           | Commit 时间 | ${{ steps.clone_repo.outputs.commit_date }} |
-          | ccache 命中率 | ${{ steps.build.outputs.hit_rate || 'N/A' }} |
           | 构建结果 | ${STATUS_ICON} |
 
           $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
