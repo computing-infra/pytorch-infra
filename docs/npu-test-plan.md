@@ -159,7 +159,24 @@ python test/run_test.py \
 
 ### 2026-04-01 执行进展
 
-#### ⏳ 当前状态：调试网络连接问题
+#### ⏳ 当前状态：NPU 设备访问问题
+
+Workflow 配置已完成，torch 和 torch_npu 可正常导入，但 NPU 设备不可用。
+
+**最新测试结果**：
+- `torch: 2.11.0+cpu` ✅
+- `torch_npu: 2.12.0` ✅
+- `NPU available: False` ❌
+- `NPU count: 0` ❌
+- 驱动错误：`drvErr=87`
+
+**问题分析**：容器内无法访问 NPU 设备 `/dev/davinci4`，可能是：
+1. 设备权限问题
+2. 驱动版本不匹配
+3. NPU 卡被其他进程占用
+4. Docker 设备挂载配置问题
+
+**下一步**：需要检查 runner 主机的 NPU 设备状态和 Docker 配置
 
 #### 问题排查历程
 
@@ -241,16 +258,76 @@ Process completed with exit code 127
     ...
 ```
 
-#### 问题 6：容器内网络连接超时（当前问题）
+#### 问题 6：容器内网络连接超时
 
 **现象**：
 ```
 unable to access 'https://github.com/...': Failed to connect to github.com port 443: Connection timed out
 ```
 
-**原因**：容器无法访问外部网络，可能是网络配置或代理问题
+**原因**：容器无法访问外部网络
 
-**状态**：待解决
+**解决**：使用代理 `https://gh-proxy.test.osinfra.cn/https://github.com/...`
+
+#### 问题 7：CANN set_env.sh 硬编码路径问题
+
+**现象**：
+```
+LD_LIBRARY_PATH: /usr/local/Ascend/cann-8.5.0/lib64:...
+ASCEND_HOME_PATH: /usr/local/Ascend/cann-8.5.0
+ImportError: libhccl.so: cannot open shared object file
+```
+
+**原因**：`set_env.sh` 脚本硬编码了 `cann-8.5.0` 路径，但实际挂载的是 `cann-9.0.0-beta.1`
+
+**解决**：手动设置 CANN 环境变量，不依赖 `set_env.sh`
+```bash
+export CANN_PATH=/usr/local/Ascend/cann
+export LD_LIBRARY_PATH=$CANN_PATH/lib64:$CANN_PATH/lib64/plugin/opskernel:...
+export ASCEND_HOME_PATH=$CANN_PATH
+export ASCEND_OPP_PATH=$CANN_PATH/opp
+```
+
+#### 问题 8：ASCEND_OPP_PATH 未设置
+
+**现象**：
+```
+Exception: ASCEND_OPP_PATH environment variable is not set.
+```
+
+**原因**：缺少 `ASCEND_OPP_PATH` 环境变量
+
+**解决**：添加 `export ASCEND_OPP_PATH=$CANN_PATH/opp`
+
+#### 问题 9：测试导入源码 torch而非安装版
+
+**现象**：
+```
+ModuleNotFoundError: No module named 'torch.version'
+```
+
+**原因**：克隆的 pytorch 源码目录包含 `torch/`，Python 优先导入源码而非 pip 安装的包
+
+**解决**：运行测试前删除源码 `torch/` 目录
+```bash
+cd official_pytorch
+rm -rf torch  # 使用 pip 安装的 torch
+python test/run_test.py --include test_torch
+```
+
+#### 问题 10：NPU 设备不可访问（当前问题）
+
+**现象**：
+```
+drvErr=87
+Can't get ascend_hal device count
+NPU available: False
+NPU count: 0
+```
+
+**原因**：容器内无法访问 NPU 硬件设备 `/dev/davinci4`
+
+**状态**：待解决 - 需要检查 runner 主机的 NPU 设备状态和 Docker 设备挂载配置
 
 ### 成功验证的配置
 
