@@ -1,0 +1,138 @@
+# ARM 版本 PyTorch Nightly 构建验证方案
+
+## 背景
+
+原有的 `nightly-build.yml` 在 x86 平台（`ubuntu-22.04` runner）上验证 Ascend/pytorch 与 PyTorch nightly 的编译兼容性。为覆盖 ARM 平台（华为 NPU 环境），新增 ARM 版本构建 workflow。
+
+## 方案设计
+
+### 环境选型
+
+| 项目 | x86 版本 | ARM 版本 |
+|------|----------|----------|
+| Runner | `ubuntu-22.04` | `npu-910b`（自注册） |
+| 运行方式 | 虚机直接运行 | Docker 容器 |
+| Docker 镜像 | 无 | `quay.io/kerer/pytorch:arm-manylinux2014-nightly-20260326055807` |
+| Python 版本 | 3.11（动态安装） | 3.11（镜像预装） |
+| 预装 PyTorch | 无 | 2.1.0（需升级到 nightly） |
+
+### Docker 镜像说明
+
+镜像基于 `quay.io/pypa/manylinux2014_aarch64`，预装：
+
+- **Python 版本**：3.9.18、3.10.13、3.11.6
+- **预装包**：pyyaml、torch==2.1.0、numpy
+- **pip 配置**：华为云镜像源
+
+镜像 Dockerfile 关键内容：
+
+```dockerfile
+FROM quay.io/pypa/manylinux2014_aarch64:2023-10-07-c1e05d1
+
+# Set pip
+RUN cd /usr/local/bin \
+    && ln -s /opt/_internal/cpython-3.9.18/bin/pip3.9 pip3.9 \
+    && ln -s /opt/_internal/cpython-3.10.13/bin/pip3.10 pip3.10 \
+    && ln -s /opt/_internal/cpython-3.11.6/bin/pip3.11 pip3.11 \
+    && ln -s python3.9 python3
+
+# Set pip source (Huawei cloud mirror)
+RUN mkdir /root/.pip \
+    && echo "[global]" > /root/.pip/pip.conf \
+    && echo "index-url=https://mirrors.huaweicloud.com/repository/pypi/simple" >> /root/.pip/pip.conf
+
+# Install torch 2.1.0 for each Python version
+RUN pip3.11 install pyyaml torch==2.1.0 numpy==1.23.2
+
+WORKDIR /home
+```
+
+### 构建流程
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  npu-910b Runner + Docker Container                         │
+├─────────────────────────────────────────────────────────────┤
+│  1. Checkout 代码                                           │
+│  2. 升级 torch 2.1.0 → nightly（pip3.11）                   │
+│  3. Clone Ascend/pytorch（含子模块）                         │
+│  4. Restore ccache                                          │
+│  5. python3.11 setup.py build bdist_wheel                   │
+│  6. Save ccache                                             │
+│  7. 上传构建日志和 wheel                                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 代码修改
+
+### 新增文件
+
+`.github/workflows/nightly-build-arm.yml`
+
+### 关键配置差异
+
+#### 1. Runner 和容器配置
+
+```yaml
+runs-on: npu-910b
+container:
+  image: quay.io/kerer/pytorch:arm-manylinux2014-nightly-20260326055807
+  options: --user root
+```
+
+#### 2. Python 命令调整
+
+镜像中 Python 路径为 `/opt/_internal/cpython-3.11.6/bin/python3.11`，已通过符号链接映射到 `python3.11`。
+
+```bash
+# 使用镜像预装的 Python 3.11
+PYTHON=python3.11
+PIP=pip3.11
+
+$PIP install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
+$PYTHON setup.py build bdist_wheel
+```
+
+#### 3. 移除的步骤
+
+| 步骤 | 原因 |
+|------|------|
+| `setup-python` | 镜像已预装 Python 3.11 |
+| `Install system dependencies` | manylinux 镜像已包含编译工具链 |
+
+#### 4. 缓存 Key 前缀
+
+添加 `arm` 前缀区分架构：
+
+```yaml
+key: ccache-arm-py3.11-${{ steps.clone_repo.outputs.commit }}
+key: pip-arm-py3.11-torch-nightly
+```
+
+#### 5. Artifact 名称
+
+添加 `-arm` 后缀：
+
+```yaml
+name: build-log-arm-${{ github.run_number }}
+name: torch_npu-wheel-arm-${{ github.run_number }}
+```
+
+## 触发方式
+
+与 x86 版本保持一致：
+
+- **定时触发**：每日 UTC 22:00、03:00、08:00（北京时间 06:00、11:00、16:00）
+- **手动触发**：`workflow_dispatch`，可选指定 PyTorch nightly 日期
+
+## 后续工作
+
+1. 推送 workflow 到远程仓库
+2. 手动触发测试构建
+3. 根据构建结果调整配置（如并行编译数、缓存大小等）
+4. 如需长期维护，可考虑统一 x86/ARM workflow 使用矩阵构建
+
+## 参考文件
+
+- `.github/workflows/nightly-build.yml`（x86 版本）
+- `.github/workflows/nightly-build-arm.yml`（ARM 版本）
