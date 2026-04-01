@@ -159,4 +159,109 @@ python test/run_test.py \
 
 ### 2026-04-01 执行进展
 
-（待更新）
+#### ⏳ 当前状态：调试网络连接问题
+
+#### 问题排查历程
+
+#### 问题 1：Workflow 未触发（0s 失败）
+
+**现象**：推送代码后 workflow 未执行，立即失败
+
+**原因**：self-hosted runner 使用 `runs-on` 必须包含 `self-hosted` 标签
+
+**解决**：
+```yaml
+# 错误配置
+runs-on: npu-910b
+
+# 正确配置
+runs-on: [self-hosted, npu-910b]
+```
+
+#### 问题 2：container options YAML 格式错误
+
+**现象**：Workflow 0s 失败，日志提示 workflow 文件问题
+
+**原因**：`container.options` 必须是单行字符串，不支持多行格式
+
+**解决**：将多行 options 合并为单行
+```yaml
+# 错误配置
+options: --user root
+  --device /dev/davinci4
+  --device /dev/davinci_manager
+
+# 正确配置
+options: --user root --device /dev/davinci4 --device /dev/davinci_manager ...
+```
+
+#### 问题 3：YAML 多行字符串语法错误
+
+**现象**：Workflow 0s 失败，YAML 解析错误
+
+**原因**：在 `run: |` 块中使用多行 Python 代码时，缩进与 YAML 格式冲突
+
+**解决**：使用单行 Python `-c` 命令或 heredoc 格式
+
+#### 问题 4：容器中没有 gh 命令
+
+**现象**：
+```
+/__w/_temp/xxx.sh: line 7: gh: command not found
+Process completed with exit code 127
+```
+
+**原因**：华为云镜像未预装 GitHub CLI
+
+**解决**：使用 `dawidd6/action-download-artifact@v6` 替代 gh 命令下载跨 workflow artifact
+```yaml
+- name: Download latest successful build wheel
+  uses: dawidd6/action-download-artifact@v6
+  with:
+    workflow: nightly-build-arm.yml
+    workflow_conclusion: success
+    repo: computing-infra/pytorch-infra
+    name: torch_npu-wheel-arm-
+    name_is_regexp: true
+    path: wheel_artifact
+```
+
+#### 问题 5：source 命令在 sh 中不工作
+
+**现象**：CANN 环境变量加载失败
+
+**原因**：GitHub Actions 默认使用 `sh -e` 执行 run，`source` 是 bash 内置命令
+
+**解决**：指定 `shell: bash`
+```yaml
+- name: Verify NPU availability
+  shell: bash
+  run: |
+    source /usr/local/Ascend/cann/set_env.sh
+    ...
+```
+
+#### 问题 6：容器内网络连接超时（当前问题）
+
+**现象**：
+```
+unable to access 'https://github.com/...': Failed to connect to github.com port 443: Connection timed out
+```
+
+**原因**：容器无法访问外部网络，可能是网络配置或代理问题
+
+**状态**：待解决
+
+### 成功验证的配置
+
+| 项目 | 配置 |
+|------|------|
+| Runner | `[self-hosted, npu-910b]` |
+| 镜像 | `swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331` |
+| CANN 路径 | `/usr/local/Ascend/cann` (符号链接到 cann-9.0.0-beta.1) |
+| NNAL 路径 | `/usr/local/Ascend/nnal` |
+| Wheel 下载 | `dawidd6/action-download-artifact@v6` |
+
+### 当前 workflow 配置
+
+详见 `.github/workflows/npu-test.yml`

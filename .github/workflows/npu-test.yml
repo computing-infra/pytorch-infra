@@ -21,8 +21,11 @@ jobs:
       PYTORCH_TESTING_DEVICE_ONLY_FOR: 'privateuseone'
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout pytorch-infra (via proxy)
+        shell: bash
+        run: |
+          git clone --depth=1 https://gh-proxy.test.osinfra.cn/https://github.com/computing-infra/pytorch-infra.git .
+          echo "Repository cloned successfully"
 
       - name: Setup cache directories
         run: |
@@ -116,7 +119,7 @@ jobs:
         id: clone_pytorch
         shell: bash
         run: |
-          git clone --depth=1 https://github.com/pytorch/pytorch.git official_pytorch
+          git clone --depth=1 https://gh-proxy.test.osinfra.cn/https://github.com/pytorch/pytorch.git official_pytorch
           cd official_pytorch
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
