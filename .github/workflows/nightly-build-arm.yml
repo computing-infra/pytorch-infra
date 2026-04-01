@@ -19,7 +19,7 @@ env:
 jobs:
   build:
     name: Build torch_npu (ARM, PyTorch nightly)
-    runs-on: npu-910b
+    runs-on: [self-hosted, npu-910b]
     container:
       image: ${{ env.DOCKER_IMAGE }}
       options: --user root
