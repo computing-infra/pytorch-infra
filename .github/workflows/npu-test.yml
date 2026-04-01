@@ -95,22 +95,22 @@ jobs:
       - name: Verify NPU availability
         shell: bash
         run: |
-          # 加载 CANN 环境变量（如果存在）
-          if [ -f /usr/local/Ascend/cann/set_env.sh ]; then
-            source /usr/local/Ascend/cann/set_env.sh || echo "Warning: source cann/set_env.sh failed"
-          else
-            echo "Warning: /usr/local/Ascend/cann/set_env.sh not found"
-          fi
+          # 手动设置 CANN 环境变量（指向正确的路径）
+          export CANN_PATH=/usr/local/Ascend/cann-9.0.0-beta.1
+          export LD_LIBRARY_PATH=$CANN_PATH/lib64:$LD_LIBRARY_PATH
+          export PATH=$CANN_PATH/bin:$PATH
+          export PYTHONPATH=$CANN_PATH/python/site-packages:$PYTHONPATH
+          export ASCEND_HOME_PATH=$CANN_PATH
+          export ASCEND_TOOLKIT_HOME=$CANN_PATH
+
+          # 加载 NNAL 环境
           if [ -f /usr/local/Ascend/nnal/atb/set_env.sh ]; then
-            source /usr/local/Ascend/nnal/atb/set_env.sh || echo "Warning: source nnal/atb/set_env.sh failed"
-          else
-            echo "Warning: /usr/local/Ascend/nnal/atb/set_env.sh not found"
+            source /usr/local/Ascend/nnal/atb/set_env.sh
           fi
 
           # 显示环境变量
           echo "=== Environment ==="
           echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
-          echo "PATH: $PATH"
           echo "ASCEND_HOME_PATH: $ASCEND_HOME_PATH"
 
           PYTHON=python3.11
@@ -135,9 +135,18 @@ jobs:
         id: run_tests
         shell: bash
         run: |
-          # 加载 CANN 环境变量
-          source /usr/local/Ascend/cann/set_env.sh
-          source /usr/local/Ascend/nnal/atb/set_env.sh
+          # 手动设置 CANN 环境变量（指向正确的路径）
+          export CANN_PATH=/usr/local/Ascend/cann-9.0.0-beta.1
+          export LD_LIBRARY_PATH=$CANN_PATH/lib64:$LD_LIBRARY_PATH
+          export PATH=$CANN_PATH/bin:$PATH
+          export PYTHONPATH=$CANN_PATH/python/site-packages:$PYTHONPATH
+          export ASCEND_HOME_PATH=$CANN_PATH
+          export ASCEND_TOOLKIT_HOME=$CANN_PATH
+
+          # 加载 NNAL 环境
+          if [ -f /usr/local/Ascend/nnal/atb/set_env.sh ]; then
+            source /usr/local/Ascend/nnal/atb/set_env.sh
+          fi
 
           PYTHON=python${{ env.PYTHON_VERSION }}
           cd official_pytorch
