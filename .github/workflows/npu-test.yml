@@ -90,17 +90,10 @@ jobs:
           $PIP install "${{ env.WHL_PATH }}"
           echo "torch_npu installed"
 
-          # 验证 NPU 可用性
-          $PYTHON -c "
-import torch
-import torch_npu
-print(f'torch version: {torch.__version__}')
-print(f'torch_npu version: {torch_npu.__version__}')
-print(f'NPU available: {torch.npu.is_available()}')
-print(f'NPU count: {torch.npu.device_count()}')
-if torch.npu.is_available():
-    print(f'NPU name: {torch.npu.get_device_name(0)}')
-"
+      - name: Verify NPU availability
+        run: |
+          PYTHON=python${{ env.PYTHON_VERSION }}
+          $PYTHON -c "import torch; import torch_npu; print(f'torch: {torch.__version__}'); print(f'torch_npu: {torch_npu.__version__}'); print(f'NPU available: {torch.npu.is_available()}'); print(f'NPU count: {torch.npu.device_count()}'); print(f'NPU name: {torch.npu.get_device_name(0) if torch.npu.is_available() else \"N/A\"}')"
 
       - name: Clone official PyTorch repository
         id: clone_pytorch
