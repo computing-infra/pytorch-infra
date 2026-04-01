@@ -158,6 +158,9 @@ jobs:
           PYTHON=python${{ env.PYTHON_VERSION }}
           cd official_pytorch
 
+          # 移除源码 torch 目录，使用 pip 安装的 torch（测试需要导入安装版而非源码版）
+          rm -rf torch
+
           # 设置测试环境变量
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="privateuseone"
 
