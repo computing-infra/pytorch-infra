@@ -77,6 +77,7 @@ jobs:
           echo "torch_npu installed"
 
       - name: Verify NPU availability
+        shell: bash
         run: |
           # 加载 CANN 环境变量
           source /usr/local/Ascend/cann/set_env.sh
@@ -87,6 +88,7 @@ jobs:
 
       - name: Clone official PyTorch repository
         id: clone_pytorch
+        shell: bash
         run: |
           git clone --depth=1 https://github.com/pytorch/pytorch.git official_pytorch
           cd official_pytorch
@@ -100,6 +102,7 @@ jobs:
 
       - name: Run core tests on NPU
         id: run_tests
+        shell: bash
         run: |
           # 加载 CANN 环境变量
           source /usr/local/Ascend/cann/set_env.sh
