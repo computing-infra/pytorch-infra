@@ -12,17 +12,15 @@ on:
         required: false
         default: ''
 
-env:
-  PYTHON_VERSION: '3.11'
-  DOCKER_IMAGE: quay.io/kerer/pytorch:arm-manylinux2014-nightly-20260326055807
-
 jobs:
   build:
     name: Build torch_npu (ARM, PyTorch nightly)
     runs-on: [self-hosted, npu-910b]
     container:
-      image: ${{ env.DOCKER_IMAGE }}
+      image: quay.io/kerer/pytorch:arm-manylinux2014-nightly-20260326055807
       options: --user root
+    env:
+      PYTHON_VERSION: '3.11'
 
     steps:
       - name: Checkout
