@@ -120,9 +120,40 @@ name: torch_npu-wheel-arm-${{ github.run_number }}
 - Runner: `[self-hosted, npu-910b]`
 - 镜像: `swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331`
 - Python: 3.11
-- 移除 ccache（镜像未安装）
 - 移除 auditwheel（aarch64 不可用）
 - 构建产物: `torch_npu-wheel-arm-10`
+
+### 缓存配置
+
+**pip 缓存**：
+```yaml
+- name: Cache pip
+  uses: actions/cache@v4
+  with:
+    path: ~/.cache/pip
+    key: pip-arm-py3.11-${{ hashFiles('**/requirements.txt') }}
+```
+
+**ccache 缓存**：
+```yaml
+- name: Cache ccache
+  uses: actions/cache@v4
+  with:
+    path: ~/.cache/ccache
+    key: ccache-arm-py3.11-${{ github.run_id }}
+```
+
+**ccache 使用说明**：
+- 构建步骤自动检测 ccache 可用性
+- 镜像无 ccache 时降级为无缓存编译
+- ccache 最大缓存 10G
+
+### PyTorch 版本说明
+
+`2.11.0+cpu` 是正确的 ARM 版本：
+- `+cpu` 后缀表示 CPU-only 版本（非 CUDA）
+- PyTorch nightly 的 `cpu` 索引包含 aarch64 架构
+- 构建出的 wheel 为 `manylinux_2_28_aarch64.whl`
 
 ---
 
