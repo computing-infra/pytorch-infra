@@ -168,26 +168,11 @@ image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/manylinux2_28_aarch64
 
 | Run ID | 状态 | 失败原因 |
 |--------|------|----------|
-| 23830432863 | 🔄 运行中 | 移除 ccache 配置，简化构建流程 |
+| 23830432863 | ❌ 失败 | auditwheel 在 aarch64 上无可用版本 |
 | 23830194985 | ❌ 失败 | ccache 命令未找到（exit code 127） |
 | 23829752650 | ❌ 失败 | 网络超时，无法连接 files.pythonhosted.org |
 | 23829557682 | ❌ 失败 | glibc 版本不兼容（已解决） |
 | 23828515786 | ❌ 失败 | Docker 权限不足（已解决） |
-
-#### 问题 4：容器网络超时
-
-**现象**：
-```
-ReadTimeoutError: HTTPSConnectionPool(host='files.pythonhosted.org', port 443): Read timed out
-```
-
-**原因**：manylinux2_28 镜像网络配置问题，访问国外 PyPI 源超时
-
-**解决**：更换为华为云预构建镜像
-```yaml
-# 更换镜像
-image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
-```
 
 #### 问题 5：ccache 命令未找到
 
@@ -201,14 +186,21 @@ Process completed with exit code 127
 
 **解决**：移除 ccache 和 pip cache 相关步骤，简化 workflow
 
-```yaml
-# 移除以下步骤
-- Cache pip
-- Restore ccache
-- Save ccache
+#### 问题 6：auditwheel 在 aarch64 上不可用
 
-# 构建步骤中移除 ccache 配置
-export MAX_JOBS=$(nproc)  # 直接使用，不通过 ccache
+**现象**：
+```
+ERROR: Could not find a version that satisfies the requirement auditwheel
+ERROR: No matching distribution found for auditwheel
+```
+
+**原因**：auditwheel 仅支持 x86_64/i686 架构，不支持 aarch64
+
+**解决**：移除 auditwheel 依赖
+
+```yaml
+# 仅安装 setuptools（auditwheel 在 ARM 上不可用）
+$PIP install setuptools
 ```
 
 **下一步**：等待构建完成验证流程
