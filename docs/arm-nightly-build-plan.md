@@ -110,6 +110,24 @@ name: torch_npu-wheel-arm-${{ github.run_number }}
 
 ### 2026-04-01 执行进展
 
+#### ✅ 构建成功
+
+| Run ID | 状态 | 结果 |
+|--------|------|------|
+| 23830621881 | ✅ 成功 | 构建耗时 23m18s，生成 wheel 包 |
+
+**成功配置总结**：
+- Runner: `[self-hosted, npu-910b]`
+- 镜像: `swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331`
+- Python: 3.11
+- 移除 ccache（镜像未安装）
+- 移除 auditwheel（aarch64 不可用）
+- 构建产物: `torch_npu-wheel-arm-10`
+
+---
+
+#### 问题排查历程
+
 #### 问题 1：Workflow 未触发
 
 **现象**：推送代码后 workflow 未执行（0s 失败）
