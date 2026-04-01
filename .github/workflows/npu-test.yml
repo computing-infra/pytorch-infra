@@ -37,40 +37,26 @@ jobs:
           restore-keys: |
             pip-arm-py${{ env.PYTHON_VERSION }}-
 
-      - name: Get latest successful build run ID
-        id: get_build
+      - name: Download latest successful build wheel
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: nightly-build-arm.yml
+          workflow_conclusion: success
+          repo: computing-infra/pytorch-infra
+          name: torch_npu-wheel-arm-
+          name_is_regexp: true
+          path: wheel_artifact
+
+      - name: Find wheel file
+        id: find_wheel
         run: |
-          # 获取最近一次成功构建的 run ID
-          RUN_ID=$(gh run list --repo computing-infra/pytorch-infra \
-            --workflow=nightly-build-arm.yml \
-            --status=success \
-            --limit=1 \
-            --json databaseId \
-            -q '.[0].databaseId')
-
-          if [ -z "$RUN_ID" ]; then
-            echo "::error::No successful build found"
-            exit 1
-          fi
-
-          echo "run_id=${RUN_ID}" >> $GITHUB_OUTPUT
-          echo "Found successful build run: ${RUN_ID}"
-
-      - name: Download wheel artifact
-        run: |
-          RUN_ID="${{ steps.get_build.outputs.run_id }}"
-          gh run download ${RUN_ID} --repo computing-infra/pytorch-infra \
-            --pattern "torch_npu-wheel-arm-*" \
-            --dir wheel_artifact
-
-          # 查找 wheel 文件
           WHL=$(find wheel_artifact -name "*.whl" | head -1)
           if [ -z "$WHL" ]; then
             echo "::error::No wheel file found in artifact"
             exit 1
           fi
+          echo "wheel_path=${WHL}" >> $GITHUB_OUTPUT
           echo "Downloaded wheel: ${WHL}"
-          echo "WHL_PATH=${WHL}" >> $GITHUB_ENV
 
       - name: Install PyTorch nightly and torch_npu
         id: install
@@ -87,7 +73,7 @@ jobs:
           echo "PyTorch nightly version: ${TORCH_VER}"
 
           # 安装 torch_npu wheel
-          $PIP install "${{ env.WHL_PATH }}"
+          $PIP install "${{ steps.find_wheel.outputs.wheel_path }}"
           echo "torch_npu installed"
 
       - name: Verify NPU availability
@@ -201,7 +187,7 @@ jobs:
           | Docker 镜像 | \`${{ env.DOCKER_IMAGE }}\` |
           | PyTorch Nightly | \`${{ steps.install.outputs.torch_version }}\` |
           | PyTorch 官方 Commit | [\`${{ steps.clone_pytorch.outputs.commit_short }}\`](https://github.com/pytorch/pytorch/commit/${{ steps.clone_pytorch.outputs.commit }}) |
-          | 构建来源 Run ID | ${{ steps.get_build.outputs.run_id }} |
+          | Wheel 文件 | \`${{ steps.find_wheel.outputs.wheel_path }}\` |
           | 测试结果 | ${STATUS_ICON} |
 
           > 查看 test-logs artifact 获取详细测试输出
