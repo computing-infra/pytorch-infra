@@ -12,12 +12,14 @@
 |------|----------|----------|
 | Runner | `ubuntu-22.04` | `[self-hosted, npu-910b]` |
 | 运行方式 | 虚机直接运行 | Docker 容器 |
-| Docker 镜像 | 无 | `swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/manylinux2_28_aarch64-builder:npu-20241231` |
+| Docker 镜像 | 无 | `swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331` |
 | Python 版本 | 3.11（动态安装） | 3.11（镜像预装） |
-| 预装 PyTorch | 无 | 需升级到 nightly |
+| 预装 PyTorch | 无 | 2.11.0 a2（需验证兼容性） |
 
-> **变更记录**：原计划使用 `quay.io/kerer/pytorch:arm-manylinux2014-nightly` 镜像，
-> 因 glibc 版本不兼容 Node.js 20 actions，已切换到 manylinux2_28 镜像。
+> **变更记录**：
+> - 原计划使用 `manylinux2014` 镜像 → glibc 版本不兼容 Node.js 20
+> - 尝试 `manylinux2_28` 镜像 → 网络超时无法访问 PyPI
+> - 当前使用 `pytorch_2.11.0_a2_aarch64_builder` 镜像（华为云预构建）
 
 ### 构建流程
 
@@ -166,11 +168,27 @@ image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/manylinux2_28_aarch64
 
 | Run ID | 状态 | 失败原因 |
 |--------|------|----------|
-| 23829752650 | ❌ 失败 | 网络超时，无法连接 github.com:443 |
+| 23830194985 | 🔄 运行中 | 更换镜像 `pytorch_2.11.0_a2_aarch64_builder:20260331` |
+| 23829752650 | ❌ 失败 | 网络超时，无法连接 files.pythonhosted.org |
 | 23829557682 | ❌ 失败 | glibc 版本不兼容（已解决） |
 | 23828515786 | ❌ 失败 | Docker 权限不足（已解决） |
 
-**下一步**：排查容器内网络访问问题
+#### 问题 4：容器网络超时
+
+**现象**：
+```
+ReadTimeoutError: HTTPSConnectionPool(host='files.pythonhosted.org', port 443): Read timed out
+```
+
+**原因**：manylinux2_28 镜像网络配置问题，访问国外 PyPI 源超时
+
+**解决**：更换为华为云预构建镜像
+```yaml
+# 更换镜像
+image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
+```
+
+**下一步**：验证新镜像构建结果
 
 ## 参考文件
 
