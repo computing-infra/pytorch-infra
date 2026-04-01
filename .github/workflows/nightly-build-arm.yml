@@ -70,7 +70,8 @@ jobs:
           PIP=pip${{ env.PYTHON_VERSION }}
           cd ascend_pytorch
           # 跳过 requirements.txt 中固定的 torch 版本，使用我们安装的 nightly
-          $PIP install setuptools auditwheel
+          # auditwheel 在 aarch64 上不可用，仅安装 setuptools
+          $PIP install setuptools
 
       - name: Build torch_npu wheel
         id: build
