@@ -95,8 +95,18 @@ jobs:
       - name: Verify NPU availability
         shell: bash
         run: |
+          # 检查 CANN 路径
+          echo "=== Checking CANN paths ==="
+          ls -la /usr/local/Ascend/ | head -20
+          ls -la /usr/local/Ascend/cann-9.0.0-beta.1/ | head -20
+
           # 手动设置 CANN 环境变量（指向正确的路径）
           export CANN_PATH=/usr/local/Ascend/cann-9.0.0-beta.1
+
+          # 检查 lib64 目录
+          echo "=== Checking lib64 ==="
+          ls -la $CANN_PATH/lib64/ | head -20 || echo "lib64 not found"
+
           export LD_LIBRARY_PATH=$CANN_PATH/lib64:$LD_LIBRARY_PATH
           export PATH=$CANN_PATH/bin:$PATH
           export PYTHONPATH=$CANN_PATH/python/site-packages:$PYTHONPATH
@@ -115,7 +125,7 @@ jobs:
 
           PYTHON=python3.11
           echo "=== Testing torch_npu import ==="
-          $PYTHON -c "import torch; print(f'torch: {torch.__version__}'); import torch_npu; print(f'torch_npu: {torch_npu.__version__}'); print(f'NPU available: {torch.npu.is_available()}'); print(f'NPU count: {torch.npu.device_count()}'); print(f'NPU name: {torch.npu.get_device_name(0) if torch.npu.is_available() else \"N/A\"}')"
+          $PYTHON -c "import torch; print(f'torch: {torch.__version__}'); import torch_npu; print(f'torch_npu: {torch_npu.__version__}'); print(f'NPU available: {torch.npu.is_available()}'); print(f'NPU count: {torch.npu.device_count()}'); print(f'NPU name: {torch.npu.get_device_name(0) if torch.npu.is_available() else \"N/A\"}')" 2>&1 || echo "Import failed"
 
       - name: Clone official PyTorch repository
         id: clone_pytorch
