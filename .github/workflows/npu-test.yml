@@ -95,29 +95,14 @@ jobs:
       - name: Verify NPU availability
         shell: bash
         run: |
-          # 手动设置 CANN 环境变量（set_env.sh 硬编码了 cann-8.5.0，但实际挂载的是 cann-9.0.0-beta.1）
-          export CANN_PATH=/usr/local/Ascend/cann
-          export LD_LIBRARY_PATH=$CANN_PATH/lib64:$CANN_PATH/lib64/plugin/opskernel:$CANN_PATH/lib64/plugin/nnengine:$CANN_PATH/opp/built-in/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64:$CANN_PATH/tools/aml/lib64:$CANN_PATH/tools/aml/lib64/plugin:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:$LD_LIBRARY_PATH
-          export PATH=$CANN_PATH/bin:$PATH
-          export PYTHONPATH=$CANN_PATH/python/site-packages:$PYTHONPATH
-          export ASCEND_HOME_PATH=$CANN_PATH
-          export ASCEND_TOOLKIT_HOME=$CANN_PATH
-          export ASCEND_OPP_PATH=$CANN_PATH/opp
-          export TBE_IMPL_PATH=$CANN_PATH/opp/built-in/op_impl/ai_core/tbe/op_tiling
-          export ASCEND_OPP_BUILT_IN=$CANN_PATH/opp/built-in
-
-          # 手动加载 NNAL 环境（atb）
-          export LD_LIBRARY_PATH=/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_1/lib:$LD_LIBRARY_PATH
+          # 加载 CANN 环境变量
+          source /usr/local/Ascend/cann/set_env.sh
+          source /usr/local/Ascend/nnal/atb/set_env.sh
 
           # 显示环境变量
           echo "=== Environment ==="
-          echo "CANN_PATH: $CANN_PATH"
-          echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
           echo "ASCEND_HOME_PATH: $ASCEND_HOME_PATH"
-
-          # 检查 libhccl.so 是否存在
-          echo "=== Checking libhccl.so ==="
-          find $CANN_PATH -name "libhccl.so" 2>/dev/null | wc -l
+          echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
           PYTHON=python3.11
           echo "=== Testing torch_npu import ==="
@@ -141,19 +126,9 @@ jobs:
         id: run_tests
         shell: bash
         run: |
-          # 手动设置 CANN 环境变量（set_env.sh 硬编码了 cann-8.5.0，但实际挂载的是 cann-9.0.0-beta.1）
-          export CANN_PATH=/usr/local/Ascend/cann
-          export LD_LIBRARY_PATH=$CANN_PATH/lib64:$CANN_PATH/lib64/plugin/opskernel:$CANN_PATH/lib64/plugin/nnengine:$CANN_PATH/opp/built-in/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64:$CANN_PATH/tools/aml/lib64:$CANN_PATH/tools/aml/lib64/plugin:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:$LD_LIBRARY_PATH
-          export PATH=$CANN_PATH/bin:$PATH
-          export PYTHONPATH=$CANN_PATH/python/site-packages:$PYTHONPATH
-          export ASCEND_HOME_PATH=$CANN_PATH
-          export ASCEND_TOOLKIT_HOME=$CANN_PATH
-          export ASCEND_OPP_PATH=$CANN_PATH/opp
-          export TBE_IMPL_PATH=$CANN_PATH/opp/built-in/op_impl/ai_core/tbe/op_tiling
-          export ASCEND_OPP_BUILT_IN=$CANN_PATH/opp/built-in
-
-          # 手动加载 NNAL 环境（atb）
-          export LD_LIBRARY_PATH=/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_1/lib:$LD_LIBRARY_PATH
+          # 加载 CANN 环境变量
+          source /usr/local/Ascend/cann/set_env.sh
+          source /usr/local/Ascend/nnal/atb/set_env.sh
 
           PYTHON=python${{ env.PYTHON_VERSION }}
           cd official_pytorch
