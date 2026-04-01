@@ -40,7 +40,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-arm-py${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements.txt') }}
+          key: pip-arm-py${{ env.PYTHON_VERSION }}-torch-nightly
           restore-keys: |
             pip-arm-py${{ env.PYTHON_VERSION }}-
 
