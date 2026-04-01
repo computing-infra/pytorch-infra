@@ -30,12 +30,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup cache directories
+        run: |
+          mkdir -p ~/.cache/pip
+          mkdir -p ~/.cache/ccache
+          chmod -R 777 ~/.cache
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-arm-py${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            pip-arm-py${{ env.PYTHON_VERSION }}-
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-arm-py${{ env.PYTHON_VERSION }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-arm-py${{ env.PYTHON_VERSION }}-
+
       - name: Upgrade PyTorch to nightly (CPU, aarch64)
         id: install_torch
         run: |
           # 使用镜像中的 Python 3.11
           PYTHON=python${{ env.PYTHON_VERSION }}
           PIP=pip${{ env.PYTHON_VERSION }}
+
+          # 配置 pip 使用缓存
+          export PIP_CACHE_DIR=~/.cache/pip
 
           $PIP install --upgrade pip
           if [ -n "${{ github.event.inputs.torch_nightly_date }}" ]; then
@@ -79,6 +104,23 @@ jobs:
           PYTHON=python${{ env.PYTHON_VERSION }}
           cd ascend_pytorch
 
+          # 配置 ccache（如果可用）
+          if command -v ccache &> /dev/null; then
+            echo "ccache found, enabling ccache"
+            ccache -M 10G
+            ccache -z || true
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+            export CCACHE_DIR=~/.cache/ccache
+            export CCACHE_COMPRESS=1
+            export CCACHE_MAXSIZE=10G
+            export CCACHE_BASEDIR="${PWD}"
+            USE_CCACHE=1
+          else
+            echo "ccache not found, building without cache"
+            USE_CCACHE=0
+          fi
+
           # 根据 runner CPU 核心数设置并行编译数
           export MAX_JOBS=$(nproc)
 
@@ -87,6 +129,14 @@ jobs:
           export BUILD_WITHOUT_SHA=1
           $PYTHON setup.py build bdist_wheel 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
+
+          # 输出 ccache 统计信息
+          if [ "${USE_CCACHE}" = "1" ]; then
+            CCACHE_STATS=$(ccache -s | grep -E "^(Hits|Misses|Cache size)" | tr '\n' ' ')
+            echo "hit_rate=${CCACHE_STATS}" >> $GITHUB_OUTPUT
+            ccache -s
+          fi
+
           echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
           if [ ${BUILD_STATUS} -eq 0 ]; then
             WHL=$(ls dist/*.whl 2>/dev/null | head -1)
@@ -131,6 +181,7 @@ jobs:
           | PyTorch Nightly | \`${{ steps.install_torch.outputs.version }}\` |
           | Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |
           | Commit 时间 | ${{ steps.clone_repo.outputs.commit_date }} |
+          | ccache 统计 | ${{ steps.build.outputs.hit_rate || 'N/A' }} |
           | 构建结果 | ${STATUS_ICON} |
 
           $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
