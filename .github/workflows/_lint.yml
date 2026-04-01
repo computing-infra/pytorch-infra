@@ -198,9 +198,8 @@ jobs:
           fi
 
           # Generate linter statistics table from lint.json
-          LINTER_STATS=""
           if [ -f lint.json ] && [ -s lint.json ]; then
-            LINTER_STATS=$(jq -rs '
+            LINTER_TABLE=$(jq -rs '
               group_by(.code) |
               sort_by(.code) |
               .[] |
@@ -210,26 +209,35 @@ jobs:
                 warnings: [.[] | select(.severity == "warning" or .severity == "advice")] | length
               } |
               "| \(.code) | \(.errors) | \(.warnings) |"
-            ' lint.json 2>/dev/null || echo "")
+            ' lint.json 2>/dev/null)
+          else
+            LINTER_TABLE=""
           fi
 
-          cat >> $GITHUB_STEP_SUMMARY << EOF
-          ## Lint 检查报告
-
-          **扫描时间**: $(date -u '+%Y-%m-%d %H:%M UTC')
-
-          **Ascend/pytorch Commit**: [\`${{ steps.clone.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone.outputs.commit }})
-
-          **Commit 时间**: ${{ steps.clone.outputs.commit_date }}
-
-          ### 当前检测结果统计
-
-          | Linter | 错误数 | 警告数 |
-          |--------|--------|--------|
-          ${LINTER_STATS}
-          | **总计** | **${ERRORS:-0}** | **${WARNINGS:-0}** |
-
-          **结果**: ${STATUS_ICON}
-
-          $( [ "$HAS_ISSUES" = "true" ] && echo "> 📥 查看 lint-report artifact 获取详细报告" || echo "> ✨ 所有检查通过" )
-          EOF
+          # Write to GITHUB_STEP_SUMMARY
+          {
+            echo "## Lint 检查报告"
+            echo ""
+            echo "**扫描时间**: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo "**Ascend/pytorch Commit**: [\`${{ steps.clone.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone.outputs.commit }})"
+            echo ""
+            echo "**Commit 时间**: ${{ steps.clone.outputs.commit_date }}"
+            echo ""
+            echo "### 当前检测结果统计"
+            echo ""
+            echo "| Linter | 错误数 | 警告数 |"
+            echo "|--------|--------|--------|"
+            if [ -n "$LINTER_TABLE" ]; then
+              echo "$LINTER_TABLE"
+            fi
+            echo "| **总计** | **${ERRORS:-0}** | **${WARNINGS:-0}** |"
+            echo ""
+            echo "**结果**: ${STATUS_ICON}"
+            echo ""
+            if [ "$HAS_ISSUES" = "true" ]; then
+              echo "> 📥 查看 lint-report artifact 获取详细报告"
+            else
+              echo "> ✨ 所有检查通过"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
