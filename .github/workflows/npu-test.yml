@@ -97,8 +97,8 @@ jobs:
         run: |
           # 检查 CANN 路径
           echo "=== Checking CANN paths ==="
-          ls -la /usr/local/Ascend/ | head -20
-          ls -la /usr/local/Ascend/cann-9.0.0-beta.1/ | head -20
+          ls /usr/local/Ascend/ 2>&1 | wc -l
+          ls /usr/local/Ascend/cann-9.0.0-beta.1/ 2>&1 | wc -l
 
           # 手动设置 CANN 环境变量（指向正确的路径）
           export CANN_PATH=/usr/local/Ascend/cann-9.0.0-beta.1
@@ -115,9 +115,13 @@ jobs:
           export ASCEND_TOOLKIT_HOME=$CANN_PATH
 
           # 加载 NNAL 环境
+          echo "=== Loading NNAL environment ==="
           if [ -f /usr/local/Ascend/nnal/atb/set_env.sh ]; then
-            source /usr/local/Ascend/nnal/atb/set_env.sh
+            source /usr/local/Ascend/nnal/atb/set_env.sh 2>&1 || echo "Warning: source nnal/atb/set_env.sh failed"
+          else
+            echo "Warning: /usr/local/Ascend/nnal/atb/set_env.sh not found"
           fi
+          echo "=== NNAL environment loaded ==="
 
           # 显示环境变量
           echo "=== Environment ==="
