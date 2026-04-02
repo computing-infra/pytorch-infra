@@ -25,6 +25,9 @@ jobs:
     env:
       PYTHON_VERSION: '3.11'
       DOCKER_IMAGE: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
+      # 跳过 auditwheel repair，避免因缺少 CANN 库（如 libccl_dpu.so）导致构建失败
+      # torch_npu 依赖外部 CANN 环境，wheel 不需要自包含这些库
+      AUDITWHEEL_PLAT: 'skip'
 
     steps:
       - name: Checkout
@@ -99,7 +102,7 @@ jobs:
           PIP=pip${{ env.PYTHON_VERSION }}
           cd ascend_pytorch
           # 跳过 requirements.txt 中固定的 torch 版本，使用我们安装的 nightly
-          # auditwheel 在 aarch64 上不可用，仅安装 setuptools
+          # auditwheel 已通过 AUDITWHEEL_PLAT=skip 跳过，仅安装 setuptools
           $PIP install setuptools
 
       - name: Build torch_npu wheel
