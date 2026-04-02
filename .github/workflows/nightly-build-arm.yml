@@ -63,10 +63,14 @@ jobs:
           export PIP_CACHE_DIR=~/.cache/pip
 
           $PIP install --upgrade pip
+
+          # 卸载镜像中预装的 torch 和 torchvision，避免版本冲突
+          $PIP uninstall -y torch torchvision || true
+
           if [ -n "${{ github.event.inputs.torch_nightly_date }}" ]; then
             DATE="${{ github.event.inputs.torch_nightly_date }}"
             $PIP install --pre \
-              "torch==2.11.0.dev${DATE}" \
+              "torch==2.12.0.dev${DATE}" \
               --index-url https://download.pytorch.org/whl/nightly/cpu
           else
             $PIP install --pre torch \
