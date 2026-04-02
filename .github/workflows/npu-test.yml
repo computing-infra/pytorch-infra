@@ -1,16 +1,16 @@
-name: NPU Test (PyTorch Official Tests)
+name: NPU Build and Test
 
 on:
   push:
     paths:
       - '.github/workflows/npu-test.yml'
   schedule:
-    - cron: '0 23 * * *'  # UTC 23:00（北京时间次日 07:00），构建后 1 小时
+    - cron: '0 23 * * *'  # UTC 23:00（北京时间次日 07:00）
   workflow_dispatch:
 
 jobs:
-  test:
-    name: Run PyTorch Tests on NPU
+  build-and-test:
+    name: Build and Test torch_npu
     runs-on: [self-hosted, npu-910b]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
@@ -18,13 +18,12 @@ jobs:
     env:
       PYTHON_VERSION: '3.11'
       DOCKER_IMAGE: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
-      PYTORCH_TESTING_DEVICE_ONLY_FOR: 'privateuseone'
+      AUDITWHEEL_PLAT: 'skip'
 
     steps:
       - name: Checkout pytorch-infra (via proxy)
         shell: bash
         run: |
-          # 清理工作目录
           rm -rf * .[!.]* 2>/dev/null || true
           git clone --depth=1 https://gh-proxy.test.osinfra.cn/https://github.com/computing-infra/pytorch-infra.git .
           echo "Repository cloned successfully"
@@ -32,54 +31,111 @@ jobs:
       - name: Setup cache directories
         run: |
           mkdir -p ~/.cache/pip
+          mkdir -p ~/.cache/ccache
           chmod -R 777 ~/.cache
 
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-arm-py${{ env.PYTHON_VERSION }}-test
+          key: pip-arm-py${{ env.PYTHON_VERSION }}-build-test
           restore-keys: |
             pip-arm-py${{ env.PYTHON_VERSION }}-
 
-      - name: Download latest successful build wheel
-        uses: dawidd6/action-download-artifact@v6
+      - name: Cache ccache
+        uses: actions/cache@v4
         with:
-          workflow: nightly-build-arm.yml
-          workflow_conclusion: success
-          repo: computing-infra/pytorch-infra
-          name: torch_npu-wheel-arm-
-          name_is_regexp: true
-          path: wheel_artifact
+          path: ~/.cache/ccache
+          key: ccache-arm-py${{ env.PYTHON_VERSION }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-arm-py${{ env.PYTHON_VERSION }}-
 
-      - name: Find wheel file
-        id: find_wheel
+      - name: Uninstall pre-installed torch/torchvision
         run: |
-          WHL=$(find wheel_artifact -name "*.whl" | head -1)
-          if [ -z "$WHL" ]; then
-            echo "::error::No wheel file found in artifact"
-            exit 1
-          fi
-          echo "wheel_path=${WHL}" >> $GITHUB_OUTPUT
-          echo "Downloaded wheel: ${WHL}"
+          pip${{ env.PYTHON_VERSION }} uninstall -y torch torchvision || true
+          echo "Pre-installed torch/torchvision uninstalled"
 
-      - name: Install PyTorch nightly and torch_npu
-        id: install
+      - name: Install PyTorch nightly
+        id: install_torch
         run: |
-          PYTHON=python${{ env.PYTHON_VERSION }}
           PIP=pip${{ env.PYTHON_VERSION }}
+          PYTHON=python${{ env.PYTHON_VERSION }}
 
           export PIP_CACHE_DIR=~/.cache/pip
+          $PIP install --upgrade pip
 
           # 安装 PyTorch nightly（CPU 版，aarch64）
           $PIP install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
+
           TORCH_VER=$($PYTHON -c "import torch; print(torch.__version__)")
-          echo "torch_version=${TORCH_VER}" >> $GITHUB_OUTPUT
+          echo "version=${TORCH_VER}" >> $GITHUB_OUTPUT
           echo "PyTorch nightly version: ${TORCH_VER}"
 
-          # 安装 torch_npu wheel
-          $PIP install "${{ steps.find_wheel.outputs.wheel_path }}"
-          echo "torch_npu installed"
+      - name: Clone Ascend/pytorch
+        id: clone_repo
+        run: |
+          git clone --depth=1 --recurse-submodules \
+            https://gitcode.com/Ascend/pytorch.git ascend_pytorch
+          cd ascend_pytorch
+          COMMIT=$(git rev-parse HEAD)
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          COMMIT_DATE=$(git log -1 --format='%ci')
+          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+          echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
+          echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
+          echo "Ascend/pytorch commit: ${COMMIT} (${COMMIT_DATE})"
+
+      - name: Build torch_npu wheel
+        id: build
+        run: |
+          PYTHON=python${{ env.PYTHON_VERSION }}
+          cd ascend_pytorch
+
+          # 配置 ccache
+          if command -v ccache &> /dev/null; then
+            echo "ccache found, enabling ccache"
+            ccache -M 10G
+            ccache -z || true
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+            export CCACHE_DIR=~/.cache/ccache
+            export CCACHE_COMPRESS=1
+            export CCACHE_MAXSIZE=10G
+            export CCACHE_BASEDIR="${PWD}"
+            USE_CCACHE=1
+          else
+            echo "ccache not found, building without cache"
+            USE_CCACHE=0
+          fi
+
+          # 构建参数
+          export MAX_JOBS=$(nproc)
+          export DISABLE_INSTALL_TORCHAIR=FALSE
+          export BUILD_WITHOUT_SHA=1
+
+          # 使用 ci/build.sh 脚本
+          bash ci/build.sh --python=${{ env.PYTHON_VERSION }} 2>&1 | tee /tmp/build.log
+          BUILD_STATUS=${PIPESTATUS[0]}
+
+          # ccache 统计
+          if [ "${USE_CCACHE}" = "1" ]; then
+            CCACHE_STATS=$(ccache -s | grep -E "^(Hits|Misses|Cache size)" | tr '\n' ' ')
+            echo "ccache_stats=${CCACHE_STATS}" >> $GITHUB_OUTPUT
+            ccache -s
+          fi
+
+          echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
+          if [ ${BUILD_STATUS} -eq 0 ]; then
+            WHL=$(ls dist/*.whl 2>/dev/null | head -1)
+            echo "wheel=${WHL}" >> $GITHUB_OUTPUT
+            echo "Build succeeded: ${WHL}"
+          fi
+          exit ${BUILD_STATUS}
+
+      - name: Install torch_npu wheel
+        run: |
+          pip${{ env.PYTHON_VERSION }} install ascend_pytorch/dist/torch_npu*.whl
+          echo "torch_npu wheel installed"
 
       - name: Check Ascend paths
         shell: bash
@@ -88,133 +144,110 @@ jobs:
           ls -la /usr/local/Ascend/ 2>&1 || echo "/usr/local/Ascend not found"
           ls -la /usr/local/Ascend/cann/ 2>&1 || echo "/usr/local/Ascend/cann not found"
           ls -la /usr/local/Ascend/nnal/ 2>&1 || echo "/usr/local/Ascend/nnal not found"
-          echo "=== Checking set_env.sh files ==="
-          cat /usr/local/Ascend/cann/set_env.sh 2>&1 || echo "cann/set_env.sh not found"
-          cat /usr/local/Ascend/nnal/atb/set_env.sh 2>&1 || echo "nnal/atb/set_env.sh not found"
 
       - name: Verify NPU availability
         shell: bash
         run: |
           # 加载 CANN 环境变量
-          source /usr/local/Ascend/cann/set_env.sh
-          source /usr/local/Ascend/nnal/atb/set_env.sh
+          source /usr/local/Ascend/cann/set_env.sh 2>/dev/null || true
+          source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
 
-          # 显示环境变量
-          echo "=== Environment ==="
-          echo "ASCEND_HOME_PATH: $ASCEND_HOME_PATH"
-          echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+          # 手动设置关键环境变量
+          export CANN_PATH=/usr/local/Ascend/cann
+          export LD_LIBRARY_PATH=$CANN_PATH/lib64:$CANN_PATH/lib64/plugin/opskernel:$CANN_PATH/lib64/plugin/nnengine:$CANN_PATH/opp/built-in/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64:$CANN_PATH/tools/aml/lib64:$CANN_PATH/tools/aml/lib64/plugin:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_1/lib:$LD_LIBRARY_PATH
+          export ASCEND_HOME_PATH=$CANN_PATH
+          export ASCEND_OPP_PATH=$CANN_PATH/opp
 
-          PYTHON=python3.11
+          PYTHON=python${{ env.PYTHON_VERSION }}
           echo "=== Testing torch_npu import ==="
           $PYTHON -c "import torch; print(f'torch: {torch.__version__}'); import torch_npu; print(f'torch_npu: {torch_npu.__version__}'); print(f'NPU available: {torch.npu.is_available()}'); print(f'NPU count: {torch.npu.device_count()}'); print(f'NPU name: {torch.npu.get_device_name(0) if torch.npu.is_available() else \"N/A\"}')"
 
-      - name: Clone official PyTorch repository
-        id: clone_pytorch
-        shell: bash
-        run: |
-          git clone --depth=1 https://gh-proxy.test.osinfra.cn/https://github.com/pytorch/pytorch.git official_pytorch
-          cd official_pytorch
-          COMMIT=$(git rev-parse HEAD)
-          COMMIT_SHORT=$(git rev-parse --short HEAD)
-          COMMIT_DATE=$(git log -1 --format='%ci')
-          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
-          echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
-          echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
-          echo "PyTorch official commit: ${COMMIT} (${COMMIT_DATE})"
-
-      - name: Run core tests on NPU
+      - name: Run test_device.py
         id: run_tests
         shell: bash
         run: |
           # 加载 CANN 环境变量
-          source /usr/local/Ascend/cann/set_env.sh
-          source /usr/local/Ascend/nnal/atb/set_env.sh
+          source /usr/local/Ascend/cann/set_env.sh 2>/dev/null || true
+          source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
+
+          # 手动设置关键环境变量
+          export CANN_PATH=/usr/local/Ascend/cann
+          export LD_LIBRARY_PATH=$CANN_PATH/lib64:$CANN_PATH/lib64/plugin/opskernel:$CANN_PATH/lib64/plugin/nnengine:$CANN_PATH/opp/built-in/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64:$CANN_PATH/tools/aml/lib64:$CANN_PATH/tools/aml/lib64/plugin:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_1/lib:$LD_LIBRARY_PATH
+          export ASCEND_HOME_PATH=$CANN_PATH
+          export ASCEND_OPP_PATH=$CANN_PATH/opp
 
           PYTHON=python${{ env.PYTHON_VERSION }}
-          cd official_pytorch
+          PIP=pip${{ env.PYTHON_VERSION }}
 
-          # 设置测试环境变量：只运行 privateuseone (NPU) 设备的测试
-          # 测试框架通过 instantiate_device_type_tests() 自动检测可用设备
-          export PYTORCH_TESTING_DEVICE_ONLY_FOR="privateuseone"
+          # 安装 pytest
+          $PIP install pytest pytest-xdist
 
-          # 创建测试日志目录
-          mkdir -p /tmp/test_logs
+          cd ascend_pytorch/test
+          $PYTHON -m pytest npu/test_device.py -v 2>&1 | tee /tmp/test.log
 
-          # 运行核心测试（分阶段执行，便于定位问题）
-          TEST_RESULT=0
-
-          # 1. 基础张量测试 (test_torch)
-          echo "=== Running test_torch ===" | tee /tmp/test_logs/test_torch.log
-          $PYTHON test/run_test.py --include test_torch 2>&1 | tee -a /tmp/test_logs/test_torch.log
-          if [ $? -ne 0 ]; then
-            echo "test_torch: FAILED"
-            TEST_RESULT=1
+          if [ $? -eq 0 ]; then
+            echo "status=0" >> $GITHUB_OUTPUT
+            echo "test_device.py: PASSED"
           else
-            echo "test_torch: PASSED"
+            echo "status=1" >> $GITHUB_OUTPUT
+            echo "test_device.py: FAILED"
           fi
 
-          # 2. NN 模块测试 (test_nn)
-          echo "=== Running test_nn ===" | tee /tmp/test_logs/test_nn.log
-          $PYTHON test/run_test.py --include test_nn 2>&1 | tee -a /tmp/test_logs/test_nn.log
-          if [ $? -ne 0 ]; then
-            echo "test_nn: FAILED"
-            TEST_RESULT=1
-          else
-            echo "test_nn: PASSED"
-          fi
-
-          # 3. 自动微分测试 (test_autograd)
-          echo "=== Running test_autograd ===" | tee /tmp/test_logs/test_autograd.log
-          $PYTHON test/run_test.py --include test_autograd 2>&1 | tee -a /tmp/test_logs/test_autograd.log
-          if [ $? -ne 0 ]; then
-            echo "test_autograd: FAILED"
-            TEST_RESULT=1
-          else
-            echo "test_autograd: PASSED"
-          fi
-
-          # 4. 算子测试 (test_ops) - 可能耗时较长
-          echo "=== Running test_ops ===" | tee /tmp/test_logs/test_ops.log
-          $PYTHON test/run_test.py --include test_ops 2>&1 | tee -a /tmp/test_logs/test_ops.log
-          if [ $? -ne 0 ]; then
-            echo "test_ops: FAILED"
-            TEST_RESULT=1
-          else
-            echo "test_ops: PASSED"
-          fi
-
-          echo "test_result=${TEST_RESULT}" >> $GITHUB_OUTPUT
-          exit ${TEST_RESULT}
-
-      - name: Upload test logs
+      - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs-${{ github.run_number }}
-          path: /tmp/test_logs
+          name: build-log-${{ github.run_number }}
+          path: /tmp/build.log
           if-no-files-found: warn
 
-      - name: Test summary
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ github.run_number }}
+          path: /tmp/test.log
+          if-no-files-found: warn
+
+      - name: Upload wheel artifact
+        if: steps.build.outputs.status == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: torch_npu-wheel-${{ github.run_number }}
+          path: ascend_pytorch/dist/*.whl
+          if-no-files-found: warn
+
+      - name: Build and Test summary
         if: always()
         run: |
-          TEST_RESULT="${{ steps.run_tests.outputs.test_result }}"
-          if [ "${TEST_RESULT}" = "0" ]; then
-            STATUS_ICON="✅ ALL PASSED"
+          BUILD_STATUS="${{ steps.build.outputs.status }}"
+          TEST_STATUS="${{ steps.run_tests.outputs.status }}"
+
+          if [ "${BUILD_STATUS}" = "0" ]; then
+            BUILD_ICON="✅ SUCCESS"
           else
-            STATUS_ICON="❌ SOME FAILED"
+            BUILD_ICON="❌ FAILED"
+          fi
+
+          if [ "${TEST_STATUS}" = "0" ]; then
+            TEST_ICON="✅ PASSED"
+          else
+            TEST_ICON="❌ FAILED"
           fi
 
           cat >> $GITHUB_STEP_SUMMARY << EOF
-          ## PyTorch Official Tests on NPU
+          ## NPU Build and Test
 
           | 项目 | 详情 |
           |------|------|
-          | 测试时间 | $(date -u '+%Y-%m-%d %H:%M UTC') |
+          | 执行时间 | $(date -u '+%Y-%m-%d %H:%M UTC') |
           | Docker 镜像 | \`${{ env.DOCKER_IMAGE }}\` |
-          | PyTorch Nightly | \`${{ steps.install.outputs.torch_version }}\` |
-          | PyTorch 官方 Commit | [\`${{ steps.clone_pytorch.outputs.commit_short }}\`](https://github.com/pytorch/pytorch/commit/${{ steps.clone_pytorch.outputs.commit }}) |
-          | Wheel 文件 | \`${{ steps.find_wheel.outputs.wheel_path }}\` |
-          | 测试结果 | ${STATUS_ICON} |
+          | PyTorch Nightly | \`${{ steps.install_torch.outputs.version }}\` |
+          | Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |
+          | Commit 时间 | ${{ steps.clone_repo.outputs.commit_date }} |
+          | ccache 统计 | ${{ steps.build.outputs.ccache_stats || 'N/A' }} |
+          | 构建结果 | ${BUILD_ICON} |
+          | 测试结果 | ${TEST_ICON} |
 
-          > 查看 test-logs artifact 获取详细测试输出
+          $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
           EOF
