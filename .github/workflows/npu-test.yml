@@ -31,14 +31,14 @@ jobs:
 
       - name: Setup cache directories
         run: |
-          mkdir -p ~/.cache/pip
-          mkdir -p ~/.cache/ccache
-          chmod -R 777 ~/.cache
+          mkdir -p /github/home/.cache/pip
+          mkdir -p /github/home/.cache/ccache
+          chmod -R 777 /github/home/.cache
 
       - name: Cache pip
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
+          path: /github/home/.cache/pip
           key: pip-arm-py${{ env.PYTHON_VERSION }}-build-test
           restore-keys: |
             pip-arm-py${{ env.PYTHON_VERSION }}-
@@ -46,8 +46,8 @@ jobs:
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ccache
-          key: ccache-arm-py${{ env.PYTHON_VERSION }}-${{ github.run_id }}
+          path: /github/home/.cache/ccache
+          key: ccache-arm-py${{ env.PYTHON_VERSION }}-${{ github.run_number }}
           restore-keys: |
             ccache-arm-py${{ env.PYTHON_VERSION }}-
 
@@ -62,7 +62,7 @@ jobs:
           PIP=pip${{ env.PYTHON_VERSION }}
           PYTHON=python${{ env.PYTHON_VERSION }}
 
-          export PIP_CACHE_DIR=~/.cache/pip
+          export PIP_CACHE_DIR=/github/home/.cache/pip
           $PIP install --upgrade pip
 
           # 安装 PyTorch nightly 2.12.0.dev20260217（CPU 版，aarch64）
@@ -99,7 +99,7 @@ jobs:
             ccache -z || true
             export CC="ccache gcc"
             export CXX="ccache g++"
-            export CCACHE_DIR=~/.cache/ccache
+            export CCACHE_DIR=/github/home/.cache/ccache
             export CCACHE_COMPRESS=1
             export CCACHE_MAXSIZE=10G
             export CCACHE_BASEDIR="${PWD}"
