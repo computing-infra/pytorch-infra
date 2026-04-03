@@ -48,14 +48,6 @@ jobs:
           restore-keys: |
             pip-arm-py${{ env.PYTHON_VERSION }}-
 
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: /github/home/.cache/ccache
-          key: ccache-arm-py${{ env.PYTHON_VERSION }}-${{ github.run_number }}
-          restore-keys: |
-            ccache-arm-py${{ env.PYTHON_VERSION }}-
-
       - name: Uninstall pre-installed torch/torchvision
         run: |
           pip${{ env.PYTHON_VERSION }} uninstall -y torch torchvision || true
@@ -91,6 +83,14 @@ jobs:
           echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
           echo "Ascend/pytorch commit: ${COMMIT} (${COMMIT_DATE})"
 
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /github/home/.cache/ccache
+          key: ccache-arm-py${{ env.PYTHON_VERSION }}-${{ steps.clone_repo.outputs.commit_short }}
+          restore-keys: |
+            ccache-arm-py${{ env.PYTHON_VERSION }}-
+
       - name: Build torch_npu wheel
         id: build
         run: |
@@ -123,9 +123,9 @@ jobs:
           bash ci/build.sh --python=${{ env.PYTHON_VERSION }} 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
 
-          # ccache 统计
+          # ccache 统计（兼容 ccache 3.x/4.x 格式）
           if [ "${USE_CCACHE}" = "1" ]; then
-            CCACHE_STATS=$(ccache -s | grep -E "^(Hits|Misses|Cache size)" | tr '\n' ' ')
+            CCACHE_STATS=$(ccache -s | grep -E "cache hit|cache miss|cache size|hit rate" | tr '\n' ' ')
             echo "ccache_stats=${CCACHE_STATS}" >> $GITHUB_OUTPUT
             ccache -s
           fi
