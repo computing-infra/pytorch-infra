@@ -7,6 +7,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/npu-test.yml'
+  schedule:
+    - cron: '0 22 * * *'  # UTC 22:00（北京时间次日 06:00），每天一次
   workflow_dispatch:
 
 jobs:
