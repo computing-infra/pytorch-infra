@@ -37,7 +37,7 @@ jobs:
 
       - name: Install ccache
         run: |
-          apt-get update && apt-get install -y ccache
+          yum install -y ccache
           ccache --version
 
       - name: Cache pip
