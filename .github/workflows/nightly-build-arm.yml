@@ -39,6 +39,11 @@ jobs:
           mkdir -p ~/.cache/ccache
           chmod -R 777 ~/.cache
 
+      - name: Install ccache
+        run: |
+          apt-get update && apt-get install -y ccache
+          ccache --version
+
       - name: Cache pip
         uses: actions/cache@v4
         with:
