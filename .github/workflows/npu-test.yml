@@ -181,6 +181,26 @@ jobs:
             echo "test_device.py: FAILED"
           fi
 
+      - name: Run all tests (access_control_test.py)
+        id: run_all_tests
+        shell: bash
+        run: |
+          source /usr/local/Ascend/cann/set_env.sh 2>/dev/null || true
+          source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
+
+          PYTHON=python${{ env.PYTHON_VERSION }}
+
+          cd ascend_pytorch/test
+          $PYTHON ../ci/access_control_test.py --all 2>&1 | tee /tmp/all_tests.log
+
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            echo "status=0" >> $GITHUB_OUTPUT
+            echo "All tests: PASSED"
+          else
+            echo "status=1" >> $GITHUB_OUTPUT
+            echo "All tests: FAILED"
+          fi
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
@@ -197,6 +217,14 @@ jobs:
           path: /tmp/test.log
           if-no-files-found: warn
 
+      - name: Upload all tests log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-tests-log-${{ github.run_number }}
+          path: /tmp/all_tests.log
+          if-no-files-found: warn
+
       - name: Upload wheel artifact
         if: steps.build.outputs.status == '0'
         uses: actions/upload-artifact@v4
@@ -210,6 +238,7 @@ jobs:
         run: |
           BUILD_STATUS="${{ steps.build.outputs.status }}"
           TEST_STATUS="${{ steps.run_tests.outputs.status }}"
+          ALL_TESTS_STATUS="${{ steps.run_all_tests.outputs.status }}"
 
           if [ "${BUILD_STATUS}" = "0" ]; then
             BUILD_ICON="✅ SUCCESS"
@@ -221,6 +250,12 @@ jobs:
             TEST_ICON="✅ PASSED"
           else
             TEST_ICON="❌ FAILED"
+          fi
+
+          if [ "${ALL_TESTS_STATUS}" = "0" ]; then
+            ALL_TESTS_ICON="✅ PASSED"
+          else
+            ALL_TESTS_ICON="❌ FAILED"
           fi
 
           cat >> $GITHUB_STEP_SUMMARY << EOF
@@ -235,7 +270,8 @@ jobs:
           | Commit 时间 | ${{ steps.clone_repo.outputs.commit_date }} |
           | ccache 统计 | ${{ steps.build.outputs.ccache_stats || 'N/A' }} |
           | 构建结果 | ${BUILD_ICON} |
-          | 测试结果 | ${TEST_ICON} |
+          | test_device.py | ${TEST_ICON} |
+          | 全量测试 | ${ALL_TESTS_ICON} |
 
           $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
           EOF
