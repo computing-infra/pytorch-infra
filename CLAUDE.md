@@ -26,8 +26,14 @@
 # 查看最近的 CI 运行记录
 gh run list --repo computing-infra/pytorch-infra --limit 5
 
-# 手动触发构建
+# 手动触发构建（x86）
 gh workflow run nightly-build.yml --repo computing-infra/pytorch-infra
+
+# 手动触发构建（ARM）
+gh workflow run nightly-build-arm.yml --repo computing-infra/pytorch-infra
+
+# 手动触发 NPU 构建+测试
+gh workflow run npu-test.yml --repo computing-infra/pytorch-infra
 
 # 手动触发 lint 检查
 gh workflow run lint.yml --repo computing-infra/pytorch-infra
@@ -85,27 +91,46 @@ fi
 
 ## 架构
 
-### Workflow: `.github/workflows/nightly-build.yml`
-- **触发方式**：每日 UTC 21:00（北京时间 05:00）自动触发，或通过 `workflow_dispatch` 手动触发
+### Workflow 架构总览
+
+| Workflow | 平台 | 环境 | 触发方式 | 用途 |
+|----------|------|------|----------|------|
+| `nightly-build.yml` | x86_64 | `ubuntu-22.04` | 每日三次 + 手动 | 编译验证（无 NPU） |
+| `nightly-build-arm.yml` | aarch64 | 自托管 NPU runner | 每日三次 + 手动 | ARM 编译验证 |
+| `npu-test.yml` | aarch64 | 自托管 NPU + Docker | 手动/PR | 构建 + NPU 真实测试 |
+| `lint.yml` | x86_64 | `ubuntu-22.04` | 每周一 + 手动 | 代码静态扫描 |
+
+### nightly-build.yml（x86 编译验证）
+- **触发方式**：每日三次（UTC 22:00/03:00/08:00，即北京时间 06:00/11:00/16:00），或手动触发
 - **运行环境**：`ubuntu-22.04`，Python 3.11
+- **特点**：使用内置桩库编译，无 CANN 依赖，仅需 GCC
 - **构建流程**：
   1. 安装 PyTorch nightly（CPU 版）
   2. 克隆 Ascend/pytorch（含子模块）
   3. 执行 `python setup.py build bdist_wheel` 构建 wheel
   4. 上传构建产物（构建日志，成功时上传 wheel）
 
+### nightly-build-arm.yml（ARM 编译验证）
+- **触发方式**：每日三次（UTC 22:00/03:00/08:00），或手动触发
+- **运行环境**：自托管 `npu-910b` runner + Docker 容器
+- **Docker 镜像**：`swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder`
+- **特点**：跳过 auditwheel repair（`AUDITWHEEL_PLAT=skip`），因 torch_npu 依赖外部 CANN
+
+### npu-test.yml（NPU 构建 + 测试）
+- **触发方式**：手动触发 或 PR 修改 workflow 文件时触发
+- **运行环境**：自托管 NPU runner + Docker，挂载真实 NPU 设备（`/dev/davinci*`）
+- **流程**：构建 → 安装 wheel → 验证 NPU 可用性 → 运行 `test_device.py`
+- **关键**：使用 `ci/build.sh` 脚本构建，而非 `setup.py`
+
+### Workflow: lint.yml（代码静态扫描）
+- **触发方式**：每周一 UTC 10:00（北京时间 18:00），或手动触发
+- **运行环境**：`ubuntu-22.04`，Python 3.11
+- **检查流程**：克隆 → 应用 lint 配置 → lintrunner 扫描 → 生成报告
+- **可选输入**：`ascend_commit` 参数指定要扫描的 commit
+
 ### Issue 追踪 (`issues/`)
 - 格式：`YYYY-MM-DD-NNN-<模块描述>.md`
 - 记录根本原因、受影响文件、修复建议
-
-### Workflow: `.github/workflows/lint.yml`
-- **触发方式**：每周一 UTC 10:00（北京时间 18:00）自动触发，或通过 `workflow_dispatch` 手动触发
-- **运行环境**：`ubuntu-22.04`，Python 3.11
-- **检查流程**：
-  1. 克隆 Ascend/pytorch 最新代码
-  2. 应用 lint 配置文件（`.lintrunner.toml`, `.clang-format`）
-  3. 使用 lintrunner 执行代码静态扫描
-  4. 生成报告并创建 issue（如发现问题）
 
 ### Linter 配置 (`lint-config/`)
 - `.lintrunner.toml`：lintrunner 配置，定义检查规则
@@ -117,6 +142,20 @@ fi
 - `clangformat_linter.py`：C++ 代码格式化检查
 - `newlines_linter.py`：换行符检查
 - `grep_linter.py`：通用模式匹配检查
+
+## 构建环境差异
+
+| 平台 | 构建方式 | ccache | auditwheel |
+|------|----------|--------|------------|
+| x86 | `setup.py build bdist_wheel` | 5G | 正常执行 |
+| ARM | `setup.py build bdist_wheel` | 10G | `skip` |
+| NPU Test | `ci/build.sh --python=3.11` | 10G（容器内） | `skip` |
+
+**关键环境变量**：
+- `MAX_JOBS=$(nproc)`：并行编译数
+- `DISABLE_INSTALL_TORCHAIR=FALSE`：启用 torchair 构建
+- `BUILD_WITHOUT_SHA=1`：跳过 SHA 验证
+- `AUDITWHEEL_PLAT=skip`：跳过 wheel 修复（ARM/NPU）
 
 ## Slash 命令
 
