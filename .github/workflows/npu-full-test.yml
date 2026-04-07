@@ -27,9 +27,10 @@ jobs:
       options: --user root --device /dev/davinci4 --device /dev/davinci_manager --device /dev/devmm_svm --device /dev/hisi_hdc -v /usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi -v /usr/local/Ascend/driver:/usr/local/Ascend/driver -v /usr/local/Ascend/firmware:/usr/local/Ascend/firmware
     strategy:
       matrix:
-        # TODO: 暂时只跑第一个分片，后续扩展为 [1, 2, 3, ..., 100]
-        shard: [1]
+        # 当前执行分片 1/2/3，后续扩展为 [1, 2, 3, ..., 100]
+        shard: [1, 2, 3]
       fail-fast: false
+      max-parallel: 1  # 串行执行，避免 NPU 设备竞争
 
     steps:
       - name: Checkout pytorch-infra (via proxy)
