@@ -171,11 +171,31 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          TEST_STATUS="${{ steps.run_test.outputs.status }}"
-          if [ "${TEST_STATUS}" = "0" ]; then
-            TEST_ICON="✅ PASSED"
+          # 读取测试统计
+          STATS_FILE=test-reports/shard_${{ matrix.shard }}_stats.json
+          if [ -f "$STATS_FILE" ]; then
+            TOTAL=$(python3 -c "import json; print(json.load(open('$STATS_FILE')).get('total', 0))")
+            PASSED=$(python3 -c "import json; print(json.load(open('$STATS_FILE')).get('passed', 0))")
+            FAILED=$(python3 -c "import json; print(json.load(open('$STATS_FILE')).get('failed', 0))")
+            SKIPPED=$(python3 -c "import json; print(json.load(open('$STATS_FILE')).get('skipped', 0))")
+            ERRORS=$(python3 -c "import json; print(json.load(open('$STATS_FILE')).get('errors', 0))")
+            DURATION=$(python3 -c "import json; print(f\"{json.load(open('$STATS_FILE')).get('duration', 0):.1f}\")")
           else
-            TEST_ICON="❌ FAILED"
+            TOTAL=0
+            PASSED=0
+            FAILED=0
+            SKIPPED=0
+            ERRORS=0
+            DURATION="0.0"
+          fi
+
+          # 判断整体状态
+          if [ "$FAILED" -eq 0 ] && [ "$ERRORS" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
+            STATUS="✅ PASSED"
+          elif [ "$TOTAL" -eq 0 ]; then
+            STATUS="⚠️ NO TESTS"
+          else
+            STATUS="❌ FAILED"
           fi
 
           cat >> $GITHUB_STEP_SUMMARY << EOF
@@ -185,8 +205,19 @@ jobs:
           |------|------|
           | PyTorch | \`v${{ steps.install.outputs.torch_version }}\` |
           | torch_npu | \`v${{ steps.install.outputs.torch_npu_version }}\` |
-          | Ascend/pytorch | [\`${{ steps.clone_ascend.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone_ascend.outputs.commit }}) |
-          | Patches applied | ${{ steps.apply_patches.outputs.patch_count }} |
-          | Shard | ${{ matrix.shard }} / ${{ env.NUM_SHARDS }} |
-          | 测试结果 | ${TEST_ICON} |
+          | Patches applied | ${{ steps.apply_patches.outputs.patch_count || 'N/A' }} |
+          | 分片 | ${{ matrix.shard }} / ${{ env.NUM_SHARDS }} |
+
+          ## 测试结果
+
+          | 状态 | 数量 |
+          |------|------|
+          | 总计 | ${TOTAL} |
+          | 通过 | ${PASSED} |
+          | 失败 | ${FAILED} |
+          | 跳过 | ${SKIPPED} |
+          | 错误 | ${ERRORS} |
+          | 耗时 | ${DURATION}s |
+
+          **结果**: ${STATUS}
           EOF

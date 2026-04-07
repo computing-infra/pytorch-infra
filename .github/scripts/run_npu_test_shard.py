@@ -5,6 +5,7 @@ NPU 测试分片执行脚本
 1. 加载 disabled_testcases.json 禁用测试列表
 2. 发现测试文件并分片
 3. 执行 pytest 并生成 JUnit XML 报告
+4. 输出测试统计信息
 """
 
 import argparse
@@ -12,9 +13,10 @@ import json
 import os
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
-from typing import List, Set
+from typing import List, Set, Dict
 
 
 def parse_args():
@@ -83,6 +85,41 @@ def shard_tests(tests: List[str], shard: int, num_shards: int) -> List[str]:
     return tests[start:start + current_size]
 
 
+def parse_junit_xml(xml_file: str) -> Dict:
+    """解析 JUnit XML 报告，返回测试统计"""
+    stats = {
+        'total': 0,
+        'passed': 0,
+        'failed': 0,
+        'skipped': 0,
+        'errors': 0,
+        'duration': 0.0
+    }
+
+    if not os.path.exists(xml_file):
+        return stats
+
+    try:
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
+
+        # 查找所有 testsuite
+        for testsuite in root.iter('testsuite'):
+            stats['total'] += int(testsuite.get('tests', 0))
+            stats['failed'] += int(testsuite.get('failures', 0))
+            stats['skipped'] += int(testsuite.get('skipped', 0))
+            stats['errors'] += int(testsuite.get('errors', 0))
+            stats['duration'] += float(testsuite.get('time', 0))
+
+        # passed = total - failed - skipped - errors
+        stats['passed'] = stats['total'] - stats['failed'] - stats['skipped'] - stats['errors']
+
+    except Exception as e:
+        print(f"Warning: Failed to parse XML report: {e}")
+
+    return stats
+
+
 def run_pytest(
     test_files: List[str],
     test_dir: str,
@@ -90,11 +127,11 @@ def run_pytest(
     shard: int,
     timeout: int,
     verbose: bool
-) -> int:
-    """执行 pytest"""
+) -> Dict:
+    """执行 pytest 并返回测试统计"""
     os.makedirs(report_dir, exist_ok=True)
 
-    xml_report = os.path.join(report_dir, f'junit_shard_{shard}.xml')
+    xml_report = os.path.abspath(os.path.join(report_dir, f'junit_shard_{shard}.xml'))
     log_file = os.path.join(report_dir, f'test_shard_{shard}.log')
 
     # 构建 pytest 命令
@@ -108,10 +145,20 @@ def run_pytest(
         '--durations=50',
     ]
 
-    cmd.extend(test_files)
+    # 添加测试文件 - 使用相对于 test_dir 的相对路径
+    test_dir_path = Path(test_dir).resolve()
+    for tf in test_files:
+        tf_path = Path(tf).resolve()
+        try:
+            rel_path = tf_path.relative_to(test_dir_path)
+            cmd.append(str(rel_path))
+        except ValueError:
+            # 如果不在 test_dir 下，使用绝对路径
+            cmd.append(str(tf_path))
 
     print(f"\n{'='*60}")
     print(f"Running shard {shard}: {len(test_files)} test files")
+    print(f"Working directory: {test_dir}")
     print(f"{'='*60}\n")
 
     # --------------------------------------------------------------------
@@ -130,26 +177,19 @@ def run_pytest(
     # - 已安装的 torch 路径放在最前面
     # - test 目录（用于测试工具模块如 common_utils）
     # - 不包含源码 torch/ 目录
-    test_dir_path = Path(test_dir)
     existing_pythonpath = env.get('PYTHONPATH', '')
 
     # 优先级：已安装 torch > test 目录 > 现有 PYTHONPATH
     new_pythonpath = str(torch_path)
-    if test_dir_path.exists():
-        # 添加 test 目录的父目录，但不包括源码 torch
-        # 注意：common_utils 等模块可能在 test 目录下
-        new_pythonpath += f":{str(test_dir_path)}"
+    new_pythonpath += f":{str(test_dir_path)}"
     if existing_pythonpath:
         new_pythonpath += f":{existing_pythonpath}"
 
     env['PYTHONPATH'] = new_pythonpath
     env['PYTORCH_TEST_NPU'] = '1'
-
-    # 禁用 torch 源码目录的自动导入
     env['TORCH_DEVICE_BACKEND_AUTOLOAD'] = '1'  # 允许加载 torch_npu backend
 
     print(f"PYTHONPATH priority: {torch_path} (installed torch)")
-    print(f"Test directory: {test_dir}")
 
     with open(log_file, 'w') as log:
         log.write(f"Test execution started at {datetime.now()}\n")
@@ -158,7 +198,7 @@ def run_pytest(
 
         result = subprocess.run(
             cmd,
-            cwd=test_dir,
+            cwd=test_dir,  # 工作目录设为 test 目录
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -169,7 +209,24 @@ def run_pytest(
         log.write(result.stdout)
 
     print(result.stdout[-5000:] if len(result.stdout) > 5000 else result.stdout)
-    return result.returncode
+
+    # 解析测试结果
+    stats = parse_junit_xml(xml_report)
+    stats['returncode'] = result.returncode
+
+    # 输出统计信息
+    print(f"\n{'='*60}")
+    print(f"Test Results for Shard {shard}")
+    print(f"{'='*60}")
+    print(f"Total:  {stats['total']}")
+    print(f"Passed: {stats['passed']}")
+    print(f"Failed: {stats['failed']}")
+    print(f"Skipped: {stats['skipped']}")
+    print(f"Errors: {stats['errors']}")
+    print(f"Duration: {stats['duration']:.2f}s")
+    print(f"{'='*60}")
+
+    return stats
 
 
 def main():
@@ -196,6 +253,12 @@ def main():
 
     if not sharded_tests:
         print("No tests to run for this shard")
+        # 输出空结果
+        stats = {'total': 0, 'passed': 0, 'failed': 0, 'skipped': 0, 'errors': 0, 'duration': 0.0, 'returncode': 0}
+        stats_file = os.path.join(args.report_dir, f'shard_{args.shard}_stats.json')
+        os.makedirs(args.report_dir, exist_ok=True)
+        with open(stats_file, 'w') as f:
+            json.dump(stats, f, indent=2)
         return 0
 
     # Step 4: 保存分片信息
@@ -213,7 +276,7 @@ def main():
         json.dump(info, f, indent=2)
 
     # Step 5: 执行测试
-    return run_pytest(
+    stats = run_pytest(
         sharded_tests,
         args.test_dir,
         args.report_dir,
@@ -221,6 +284,13 @@ def main():
         args.timeout,
         args.verbose
     )
+
+    # Step 6: 保存测试统计到 JSON 文件（供 workflow 读取）
+    stats_file = os.path.join(args.report_dir, f'shard_{args.shard}_stats.json')
+    with open(stats_file, 'w') as f:
+        json.dump(stats, f, indent=2)
+
+    return stats.get('returncode', 1)
 
 
 if __name__ == '__main__':
