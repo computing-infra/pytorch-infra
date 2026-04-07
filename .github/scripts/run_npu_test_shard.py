@@ -106,7 +106,6 @@ def run_pytest(
         f'--timeout={timeout}',
         '-p', 'no:xdist',  # 禁用 xdist（单进程）
         '--durations=50',
-        '-x',  # 首次失败即停止（可选）
     ]
 
     cmd.extend(test_files)
@@ -115,9 +114,42 @@ def run_pytest(
     print(f"Running shard {shard}: {len(test_files)} test files")
     print(f"{'='*60}\n")
 
+    # --------------------------------------------------------------------
+    # 关键：Python 路径优先级
+    # 1. 已安装的 torch/torch_npu（pip site-packages）优先
+    # 2. 不把源码根目录加入 PYTHONPATH（避免导入未编译的 torch）
+    # 3. 只添加必要的测试辅助路径
+    # --------------------------------------------------------------------
     env = os.environ.copy()
-    env['PYTHONPATH'] = str(Path(test_dir).parent)
+
+    # 获取已安装 torch 的路径，确保优先级最高
+    import torch
+    torch_path = Path(torch.__file__).parent.parent  # torch 包的父目录 (site-packages)
+
+    # 构建 PYTHONPATH：
+    # - 已安装的 torch 路径放在最前面
+    # - test 目录（用于测试工具模块如 common_utils）
+    # - 不包含源码 torch/ 目录
+    test_dir_path = Path(test_dir)
+    existing_pythonpath = env.get('PYTHONPATH', '')
+
+    # 优先级：已安装 torch > test 目录 > 现有 PYTHONPATH
+    new_pythonpath = str(torch_path)
+    if test_dir_path.exists():
+        # 添加 test 目录的父目录，但不包括源码 torch
+        # 注意：common_utils 等模块可能在 test 目录下
+        new_pythonpath += f":{str(test_dir_path)}"
+    if existing_pythonpath:
+        new_pythonpath += f":{existing_pythonpath}"
+
+    env['PYTHONPATH'] = new_pythonpath
     env['PYTORCH_TEST_NPU'] = '1'
+
+    # 禁用 torch 源码目录的自动导入
+    env['TORCH_DEVICE_BACKEND_AUTOLOAD'] = '1'  # 允许加载 torch_npu backend
+
+    print(f"PYTHONPATH priority: {torch_path} (installed torch)")
+    print(f"Test directory: {test_dir}")
 
     with open(log_file, 'w') as log:
         log.write(f"Test execution started at {datetime.now()}\n")
