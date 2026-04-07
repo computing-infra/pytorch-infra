@@ -53,9 +53,8 @@ jobs:
           echo "Pre-installed torch/torchvision uninstalled"
 
       - name: Install PyTorch 2.7.1 and torch_npu
-        id: install
         run: |
-          # 先设置 CANN 环境变量（torch_npu 依赖 CANN 库）
+          # 设置 CANN 环境变量（torch_npu 依赖 CANN 库）
           source /usr/local/Ascend/cann/set_env.sh 2>/dev/null || true
           source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
 
@@ -67,12 +66,7 @@ jobs:
           $PIP install torch==${{ env.PYTORCH_VERSION }} --index-url https://download.pytorch.org/whl/cpu
           $PIP install ${{ env.TORCH_NPU_WHL }}
 
-          # 获取版本（torch_npu 会输出警告到 stdout，只取最后一行）
-          TORCH_VER=$($PYTHON -c "import torch; print(torch.__version__)" 2>/dev/null | tail -1)
-          NPU_VER=$($PYTHON -c "import torch_npu; print(torch_npu.__version__)" 2>/dev/null | tail -1)
-          echo "torch_version=${TORCH_VER}" >> $GITHUB_OUTPUT
-          echo "torch_npu_version=${NPU_VER}" >> $GITHUB_OUTPUT
-          echo "PyTorch: ${TORCH_VER}, torch_npu: ${NPU_VER}"
+          echo "PyTorch ${{ env.PYTORCH_VERSION }} and torch_npu installed"
 
       - name: Clone Ascend/pytorch v2.7.1 (for test_upsteam patches)
         id: clone_ascend
@@ -189,6 +183,9 @@ jobs:
             DURATION="0.0"
           fi
 
+          # 从环境变量提取 torch_npu 版本
+          TORCH_NPU_VER=$(echo "${{ env.TORCH_NPU_WHL }}" | sed 's/.*\/\([^/]*\.whl\)/\1/')
+
           # 判断整体状态
           if [ "$FAILED" -eq 0 ] && [ "$ERRORS" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
             STATUS="✅ PASSED"
@@ -203,8 +200,8 @@ jobs:
 
           | 项目 | 详情 |
           |------|------|
-          | PyTorch | \`v${{ steps.install.outputs.torch_version }}\` |
-          | torch_npu | \`v${{ steps.install.outputs.torch_npu_version }}\` |
+          | PyTorch | \`v${{ env.PYTORCH_VERSION }}\` |
+          | torch_npu | \`${TORCH_NPU_VER}\` |
           | Patches applied | ${{ steps.apply_patches.outputs.patch_count || 'N/A' }} |
           | 分片 | ${{ matrix.shard }} / ${{ env.NUM_SHARDS }} |
 
