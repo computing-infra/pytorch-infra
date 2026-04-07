@@ -75,16 +75,16 @@ jobs:
           echo "torch_npu_version=${NPU_VER}" >> $GITHUB_OUTPUT
           echo "PyTorch: ${TORCH_VER}, torch_npu: ${NPU_VER}"
 
-      - name: Clone Ascend/pytorch (for test_upsteam patches)
+      - name: Clone Ascend/pytorch v2.7.1 (for test_upsteam patches)
         id: clone_ascend
         run: |
-          git clone --depth=1 --recurse-submodules https://gitcode.com/Ascend/pytorch.git ascend_pytorch
+          git clone --depth=1 --branch v2.7.1 --recurse-submodules https://gitcode.com/Ascend/pytorch.git ascend_pytorch
           cd ascend_pytorch
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
           echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
           echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
-          echo "Ascend/pytorch commit: ${COMMIT_SHORT}"
+          echo "Ascend/pytorch v2.7.1 commit: ${COMMIT_SHORT}"
 
       - name: Clone PyTorch v2.7.1 (for test source)
         run: |
