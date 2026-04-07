@@ -139,13 +139,13 @@ jobs:
 
           mkdir -p ${REPORT_DIR}
 
-          cd pytorch-test-src
+          # 脚本在当前仓库，测试在 pytorch-test-src
           $PYTHON .github/scripts/run_npu_test_shard.py \
             --shard ${{ matrix.shard }} \
             --num-shards ${NUM_SHARDS} \
-            --test-dir test \
-            --disabled-testcases test_upsteam/disabled_testcases.json \
-            --report-dir ../${REPORT_DIR} \
+            --test-dir pytorch-test-src/test \
+            --disabled-testcases pytorch-test-src/test_upsteam/disabled_testcases.json \
+            --report-dir ${REPORT_DIR} \
             --timeout 600 \
             2>&1 | tee /tmp/test_shard_${{ matrix.shard }}.log
 
