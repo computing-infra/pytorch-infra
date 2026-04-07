@@ -29,10 +29,12 @@ jobs:
       fail-fast: false
 
     steps:
-      - name: Checkout pytorch-infra
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+      - name: Checkout pytorch-infra (via proxy)
+        run: |
+          rm -rf * .[!.]* 2>/dev/null || true
+          git clone --depth=1 --branch ${{ github.ref_name }} \
+            https://gh-proxy.test.osinfra.cn/https://github.com/computing-infra/pytorch-infra.git .
+          echo "Checked out branch: ${{ github.ref_name }}"
 
       - name: Setup cache directories
         run: |
