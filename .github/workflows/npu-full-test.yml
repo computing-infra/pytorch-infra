@@ -4,11 +4,14 @@ on:
   push:
     paths:
       - '.github/workflows/npu-full-test.yml'
+      - '.github/scripts/run_npu_test_shard.py'
   pull_request:
     paths:
       - '.github/workflows/npu-full-test.yml'
+      - '.github/scripts/run_npu_test_shard.py'
   schedule:
     - cron: '0 22 * * 1'  # UTC 22:00（北京时间次日 06:00），每周一
+  workflow_dispatch:
 
 env:
   PYTHON_VERSION: '3.11'
