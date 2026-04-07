@@ -68,9 +68,9 @@ jobs:
           $PIP install torch==${{ env.PYTORCH_VERSION }} --index-url https://download.pytorch.org/whl/cpu
           $PIP install ${{ env.TORCH_NPU_WHL }}
 
-          # 获取版本（重定向 torch_npu 的警告输出）
-          TORCH_VER=$($PYTHON -c "import torch; print(torch.__version__)" 2>/dev/null)
-          NPU_VER=$($PYTHON -c "import torch_npu; print(torch_npu.__version__)" 2>/dev/null)
+          # 获取版本（torch_npu 会输出警告到 stdout，只取最后一行）
+          TORCH_VER=$($PYTHON -c "import torch; print(torch.__version__)" 2>/dev/null | tail -1)
+          NPU_VER=$($PYTHON -c "import torch_npu; print(torch_npu.__version__)" 2>/dev/null | tail -1)
           echo "torch_version=${TORCH_VER}" >> $GITHUB_OUTPUT
           echo "torch_npu_version=${NPU_VER}" >> $GITHUB_OUTPUT
           echo "PyTorch: ${TORCH_VER}, torch_npu: ${NPU_VER}"
