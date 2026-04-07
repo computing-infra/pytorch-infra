@@ -170,9 +170,17 @@ jobs:
       - name: Summary
         if: always()
         run: |
+          # 从环境变量提取 torch_npu 版本
+          TORCH_NPU_VER=$(basename "${{ env.TORCH_NPU_WHL }}")
+          PYTORCH_VER="v${{ env.PYTORCH_VERSION }}"
+
           # 读取测试统计
-          STATS_FILE=test-reports/shard_${{ matrix.shard }}_stats.json
+          STATS_FILE="test-reports/shard_${{ matrix.shard }}_stats.json"
+          echo "Looking for stats file: $STATS_FILE"
+          ls -la test-reports/ 2>/dev/null || echo "test-reports directory not found"
+
           if [ -f "$STATS_FILE" ]; then
+            echo "Stats file found, reading..."
             TOTAL=$(python3 -c "import json; print(json.load(open('$STATS_FILE')).get('total', 0))")
             PASSED=$(python3 -c "import json; print(json.load(open('$STATS_FILE')).get('passed', 0))")
             FAILED=$(python3 -c "import json; print(json.load(open('$STATS_FILE')).get('failed', 0))")
@@ -180,6 +188,7 @@ jobs:
             ERRORS=$(python3 -c "import json; print(json.load(open('$STATS_FILE')).get('errors', 0))")
             DURATION=$(python3 -c "import json; print(f\"{json.load(open('$STATS_FILE')).get('duration', 0):.1f}\")")
           else
+            echo "Stats file not found, using defaults"
             TOTAL=0
             PASSED=0
             FAILED=0
@@ -188,8 +197,7 @@ jobs:
             DURATION="0.0"
           fi
 
-          # 从环境变量提取 torch_npu 版本
-          TORCH_NPU_VER=$(echo "${{ env.TORCH_NPU_WHL }}" | sed 's/.*\/\([^/]*\.whl\)/\1/')
+          echo "Test stats: Total=$TOTAL, Passed=$PASSED, Failed=$FAILED, Skipped=$SKIPPED, Errors=$ERRORS"
 
           # 判断整体状态
           if [ "$FAILED" -eq 0 ] && [ "$ERRORS" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
@@ -200,26 +208,25 @@ jobs:
             STATUS="❌ FAILED"
           fi
 
-          cat >> $GITHUB_STEP_SUMMARY << EOF
-          ## PyTorch NPU Full Test - Shard ${{ matrix.shard }}/${{ env.NUM_SHARDS }}
-
-          | 项目 | 详情 |
-          |------|------|
-          | PyTorch | \`v${{ env.PYTORCH_VERSION }}\` |
-          | torch_npu | \`${TORCH_NPU_VER}\` |
-          | Patches applied | ${{ steps.apply_patches.outputs.patch_count || 'N/A' }} |
-          | 分片 | ${{ matrix.shard }} / ${{ env.NUM_SHARDS }} |
-
-          ## 测试结果
-
-          | 状态 | 数量 |
-          |------|------|
-          | 总计 | ${TOTAL} |
-          | 通过 | ${PASSED} |
-          | 失败 | ${FAILED} |
-          | 跳过 | ${SKIPPED} |
-          | 错误 | ${ERRORS} |
-          | 耗时 | ${DURATION}s |
-
-          **结果**: ${STATUS}
-          EOF
+          # 写入 Summary
+          echo "## PyTorch NPU Full Test - Shard ${{ matrix.shard }}/${{ env.NUM_SHARDS }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 项目 | 详情 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| PyTorch | \`${PYTORCH_VER}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| torch_npu | \`${TORCH_NPU_VER}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Patches applied | ${{ steps.apply_patches.outputs.patch_count || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 分片 | ${{ matrix.shard }} / ${{ env.NUM_SHARDS }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 测试结果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 状态 | 数量 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 总计 | ${TOTAL} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 通过 | ${PASSED} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 失败 | ${FAILED} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 跳过 | ${SKIPPED} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 错误 | ${ERRORS} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 耗时 | ${DURATION}s |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**结果**: ${STATUS}" >> $GITHUB_STEP_SUMMARY
