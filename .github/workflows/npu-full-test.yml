@@ -56,6 +56,10 @@ jobs:
       - name: Install PyTorch 2.7.1 and torch_npu
         id: install
         run: |
+          # 先设置 CANN 环境变量（torch_npu 依赖 CANN 库）
+          source /usr/local/Ascend/cann/set_env.sh 2>/dev/null || true
+          source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
+
           PIP=pip${{ env.PYTHON_VERSION }}
           PYTHON=python${{ env.PYTHON_VERSION }}
           export PIP_CACHE_DIR=/github/home/.cache/pip
