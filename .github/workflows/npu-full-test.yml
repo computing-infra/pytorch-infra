@@ -9,208 +9,24 @@ on:
       - '.github/workflows/npu-full-test.yml'
   schedule:
     - cron: '0 22 * * 1'  # UTC 22:00（北京时间次日 06:00），每周一
-  workflow_dispatch:
-    inputs:
-      num-shards:
-        description: 'Number of shards to split tests'
-        required: false
-        default: '10'
-      shard:
-        description: 'Specific shard to run (1-N, leave empty to run all shards)'
-        required: false
-        default: ''
 
 env:
   PYTHON_VERSION: '3.11'
   PYTORCH_VERSION: '2.7.1'
   TORCH_NPU_WHL: 'https://gitcode.com/Ascend/pytorch/releases/download/v7.3.1-pytorch2.7.1/torch_npu-2.7.1.post3-cp311-cp311-manylinux_2_28_aarch64.whl'
+  NUM_SHARDS: '100'  # 100 个分片，每个分片约 1% 用例
 
 jobs:
-  # 单分片测试（手动指定 shard 时）
-  single-shard:
-    if: github.event_name == 'workflow_dispatch' && inputs.shard != ''
-    runs-on: [self-hosted, npu-910b]
-    container:
-      image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
-      options: --user root --device /dev/davinci4 --device /dev/davinci_manager --device /dev/devmm_svm --device /dev/hisi_hdc -v /usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi -v /usr/local/Ascend/driver:/usr/local/Ascend/driver -v /usr/local/Ascend/firmware:/usr/local/Ascend/firmware
-
-    steps:
-      - name: Checkout pytorch-infra
-        shell: bash
-        run: |
-          rm -rf * .[!.]* 2>/dev/null || true
-          git clone --depth=1 https://gh-proxy.test.osinfra.cn/https://github.com/computing-infra/pytorch-infra.git .
-
-      - name: Setup cache directories
-        run: |
-          mkdir -p /github/home/.cache/pip
-          chmod -R 777 /github/home/.cache
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: /github/home/.cache/pip
-          key: pip-arm-fulltest-py${{ env.PYTHON_VERSION }}-v${{ env.PYTORCH_VERSION }}
-          restore-keys: |
-            pip-arm-fulltest-py${{ env.PYTHON_VERSION }}-
-
-      - name: Uninstall pre-installed torch/torchvision
-        run: |
-          pip${{ env.PYTHON_VERSION }} uninstall -y torch torchvision || true
-          echo "Pre-installed torch/torchvision uninstalled"
-
-      - name: Install PyTorch 2.7.1 and torch_npu
-        id: install
-        run: |
-          PIP=pip${{ env.PYTHON_VERSION }}
-          PYTHON=python${{ env.PYTHON_VERSION }}
-          export PIP_CACHE_DIR=/github/home/.cache/pip
-
-          $PIP install --upgrade pip
-          # 安装 PyTorch 2.7.1 CPU 版（aarch64）
-          $PIP install torch==${{ env.PYTORCH_VERSION }} --index-url https://download.pytorch.org/whl/cpu
-
-          # 安装预构建的 torch_npu
-          $PIP install ${{ env.TORCH_NPU_WHL }}
-
-          TORCH_VER=$($PYTHON -c "import torch; print(torch.__version__)")
-          NPU_VER=$($PYTHON -c "import torch_npu; print(torch_npu.__version__)")
-          echo "torch_version=${TORCH_VER}" >> $GITHUB_OUTPUT
-          echo "torch_npu_version=${NPU_VER}" >> $GITHUB_OUTPUT
-          echo "PyTorch: ${TORCH_VER}, torch_npu: ${NPU_VER}"
-
-      - name: Clone Ascend/pytorch (for test_upsteam patches)
-        id: clone_ascend
-        run: |
-          git clone --depth=1 --recurse-submodules https://gitcode.com/Ascend/pytorch.git ascend_pytorch
-          cd ascend_pytorch
-          COMMIT=$(git rev-parse HEAD)
-          COMMIT_SHORT=$(git rev-parse --short HEAD)
-          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
-          echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
-          echo "Ascend/pytorch commit: ${COMMIT_SHORT}"
-
-      - name: Clone PyTorch v2.7.1 (for test source)
-        run: |
-          git clone --depth=1 --branch v${{ env.PYTORCH_VERSION }} \
-            https://gh-proxy.test.osinfra.cn/https://github.com/pytorch/pytorch.git pytorch-test-src
-
-      - name: Copy test_upsteam patches
-        run: |
-          cp -r ascend_pytorch/test_upsteam pytorch-test-src/
-
-      - name: Apply NPU patches
-        id: apply_patches
-        run: |
-          cd pytorch-test-src/test_upsteam
-          chmod +x apply_patch.sh
-          ./apply_patch.sh 2>&1 | tee /tmp/patch.log
-          # 统计补丁数量
-          PATCH_COUNT=$(grep -c "成功" /tmp/patch.log || echo "0")
-          echo "patch_count=${PATCH_COUNT}" >> $GITHUB_OUTPUT
-
-      - name: Verify NPU availability
-        run: |
-          source /usr/local/Ascend/cann/set_env.sh 2>/dev/null || true
-          source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
-
-          PYTHON=python${{ env.PYTHON_VERSION }}
-          $PYTHON -c "
-          import torch
-          print(f'torch: {torch.__version__}')
-          import torch_npu
-          print(f'torch_npu: {torch_npu.__version__}')
-          print(f'NPU available: {torch.npu.is_available()}')
-          print(f'NPU count: {torch.npu.device_count()}')
-          if torch.npu.is_available():
-              print(f'NPU name: {torch.npu.get_device_name(0)}')
-          "
-
-      - name: Install test dependencies
-        run: |
-          PIP=pip${{ env.PYTHON_VERSION }}
-          cd pytorch-test-src
-          $PIP install pytest pytest-timeout pytest-xdist hypothesis
-          $PIP install -r requirements.txt 2>/dev/null || true
-
-      - name: Run shard ${{ inputs.shard }}/${{ inputs.num-shards }}
-        id: run_test
-        run: |
-          source /usr/local/Ascend/cann/set_env.sh 2>/dev/null || true
-          source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
-
-          PYTHON=python${{ env.PYTHON_VERSION }}
-          SHARD=${{ inputs.shard }}
-          NUM_SHARDS=${{ inputs.num-shards }}
-          REPORT_DIR=test-reports
-
-          mkdir -p ${REPORT_DIR}
-
-          cd pytorch-test-src
-          $PYTHON .github/scripts/run_npu_test_shard.py \
-            --shard ${SHARD} \
-            --num-shards ${NUM_SHARDS} \
-            --test-dir test \
-            --disabled-testcases test_upsteam/disabled_testcases.json \
-            --report-dir ../${REPORT_DIR} \
-            --timeout 600 \
-            2>&1 | tee /tmp/test_shard_${SHARD}.log
-
-          echo "status=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
-
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-reports-shard-${{ inputs.shard }}
-          path: test-reports/
-          retention-days: 30
-
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-shard-${{ inputs.shard }}
-          path: |
-            /tmp/patch.log
-            /tmp/test_shard_${{ inputs.shard }}.log
-          if-no-files-found: warn
-
-      - name: Summary
-        if: always()
-        run: |
-          TEST_STATUS="${{ steps.run_test.outputs.status }}"
-          if [ "${TEST_STATUS}" = "0" ]; then
-            TEST_ICON="✅ PASSED"
-          else
-            TEST_ICON="❌ FAILED"
-          fi
-
-          cat >> $GITHUB_STEP_SUMMARY << EOF
-          ## PyTorch NPU Full Test - Shard ${{ inputs.shard }}
-
-          | 项目 | 详情 |
-          |------|------|
-          | PyTorch | \`v${{ steps.install.outputs.torch_version }}\` |
-          | torch_npu | \`v${{ steps.install.outputs.torch_npu_version }}\` |
-          | Ascend/pytorch | [\`${{ steps.clone_ascend.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone_ascend.outputs.commit }}) |
-          | Patches applied | ${{ steps.apply_patches.outputs.patch_count }} |
-          | Shard | ${{ inputs.shard }} / ${{ inputs.num-shards }} |
-          | 测试结果 | ${TEST_ICON} |
-          EOF
-
-  # 多分片矩阵测试（schedule 或不指定 shard 时）
-  matrix-test:
-    if: github.event_name != 'workflow_dispatch' || inputs.shard == ''
+  test:
     runs-on: [self-hosted, npu-910b]
     container:
       image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
       options: --user root --device /dev/davinci4 --device /dev/davinci_manager --device /dev/devmm_svm --device /dev/hisi_hdc -v /usr/local/sbin/npu-smi:/usr/local/sbin/npu-smi -v /usr/local/Ascend/driver:/usr/local/Ascend/driver -v /usr/local/Ascend/firmware:/usr/local/Ascend/firmware
     strategy:
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        # TODO: 暂时只跑第一个分片，后续扩展为 [1, 2, 3, ..., 100]
+        shard: [1]
       fail-fast: false
-      max-parallel: 1  # 串行执行，避免 NPU 设备竞争
 
     steps:
       - name: Checkout pytorch-infra
@@ -252,8 +68,9 @@ jobs:
           NPU_VER=$($PYTHON -c "import torch_npu; print(torch_npu.__version__)")
           echo "torch_version=${TORCH_VER}" >> $GITHUB_OUTPUT
           echo "torch_npu_version=${NPU_VER}" >> $GITHUB_OUTPUT
+          echo "PyTorch: ${TORCH_VER}, torch_npu: ${NPU_VER}"
 
-      - name: Clone Ascend/pytorch (for patches)
+      - name: Clone Ascend/pytorch (for test_upsteam patches)
         id: clone_ascend
         run: |
           git clone --depth=1 --recurse-submodules https://gitcode.com/Ascend/pytorch.git ascend_pytorch
@@ -262,19 +79,42 @@ jobs:
           COMMIT_SHORT=$(git rev-parse --short HEAD)
           echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
           echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
+          echo "Ascend/pytorch commit: ${COMMIT_SHORT}"
 
-      - name: Clone PyTorch v2.7.1 (test source)
+      - name: Clone PyTorch v2.7.1 (for test source)
         run: |
           git clone --depth=1 --branch v${{ env.PYTORCH_VERSION }} \
             https://gh-proxy.test.osinfra.cn/https://github.com/pytorch/pytorch.git pytorch-test-src
 
-      - name: Copy and apply patches
-        id: apply_patches
+      - name: Copy test_upsteam patches
         run: |
           cp -r ascend_pytorch/test_upsteam pytorch-test-src/
+
+      - name: Apply NPU patches
+        id: apply_patches
+        run: |
           cd pytorch-test-src/test_upsteam
           chmod +x apply_patch.sh
           ./apply_patch.sh 2>&1 | tee /tmp/patch.log
+          PATCH_COUNT=$(grep -c "成功" /tmp/patch.log || echo "0")
+          echo "patch_count=${PATCH_COUNT}" >> $GITHUB_OUTPUT
+
+      - name: Verify NPU availability
+        run: |
+          source /usr/local/Ascend/cann/set_env.sh 2>/dev/null || true
+          source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
+
+          PYTHON=python${{ env.PYTHON_VERSION }}
+          $PYTHON -c "
+          import torch
+          print(f'torch: {torch.__version__}')
+          import torch_npu
+          print(f'torch_npu: {torch_npu.__version__}')
+          print(f'NPU available: {torch.npu.is_available()}')
+          print(f'NPU count: {torch.npu.device_count()}')
+          if torch.npu.is_available():
+              print(f'NPU name: {torch.npu.get_device_name(0)}')
+          "
 
       - name: Install test dependencies
         run: |
@@ -283,14 +123,13 @@ jobs:
           $PIP install pytest pytest-timeout pytest-xdist hypothesis
           $PIP install -r requirements.txt 2>/dev/null || true
 
-      - name: Run shard ${{ matrix.shard }}/10
+      - name: Run shard ${{ matrix.shard }}/${{ env.NUM_SHARDS }}
         id: run_test
         run: |
           source /usr/local/Ascend/cann/set_env.sh 2>/dev/null || true
           source /usr/local/Ascend/nnal/atb/set_env.sh 2>/dev/null || true
 
           PYTHON=python${{ env.PYTHON_VERSION }}
-          NUM_SHARDS=${{ inputs.num-shards || '10' }}
           REPORT_DIR=test-reports
 
           mkdir -p ${REPORT_DIR}
@@ -325,69 +164,25 @@ jobs:
             /tmp/test_shard_${{ matrix.shard }}.log
           if-no-files-found: warn
 
-  # 汇总报告（所有分片完成后）
-  summary:
-    needs: matrix-test
-    if: always() && (github.event_name != 'workflow_dispatch' || inputs.shard == '')
-    runs-on: [self-hosted, npu-910b]
-    container:
-      image: swr.cn-north-4.myhuaweicloud.com/frameworkptadapter/pytorch_2.11.0_a2_aarch64_builder:20260331
-      options: --user root
-
-    steps:
-      - name: Checkout pytorch-infra
-        shell: bash
-        run: |
-          rm -rf * .[!.]* 2>/dev/null || true
-          git clone --depth=1 https://gh-proxy.test.osinfra.cn/https://github.com/computing-infra/pytorch-infra.git .
-
-      - name: Download all test reports
-        uses: actions/download-artifact@v4
-        with:
-          pattern: test-reports-shard-*
-          path: all-reports
-          merge-multiple: true
-
-      - name: Generate summary report
-        id: summary
-        run: |
-          PYTHON=python${{ env.PYTHON_VERSION || '3.11' }}
-
-          $PYTHON .github/scripts/generate_test_summary.py \
-            --report-dir all-reports \
-            --output-dir summary \
-            2>&1 | tee /tmp/summary.log
-
-          # 提取关键指标
-          TOTAL_TESTS=$(grep "Total tests:" /tmp/summary.log | awk '{print $3}' || echo "N/A")
-          PASSED=$(grep "Passed:" /tmp/summary.log | awk '{print $2}' || echo "N/A")
-          FAILED=$(grep "Failed:" /tmp/summary.log | awk '{print $2}' || echo "N/A")
-          SKIPPED=$(grep "Skipped:" /tmp/summary.log | awk '{print $2}' || echo "N/A")
-
-          echo "total=${TOTAL_TESTS}" >> $GITHUB_OUTPUT
-          echo "passed=${PASSED}" >> $GITHUB_OUTPUT
-          echo "failed=${FAILED}" >> $GITHUB_OUTPUT
-          echo "skipped=${SKIPPED}" >> $GITHUB_OUTPUT
-
-      - name: Upload summary
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-summary
-          path: summary/
-          retention-days: 30
-
-      - name: Final summary
+      - name: Summary
         if: always()
         run: |
+          TEST_STATUS="${{ steps.run_test.outputs.status }}"
+          if [ "${TEST_STATUS}" = "0" ]; then
+            TEST_ICON="✅ PASSED"
+          else
+            TEST_ICON="❌ FAILED"
+          fi
+
           cat >> $GITHUB_STEP_SUMMARY << EOF
-          ## PyTorch NPU Full Test Summary (v2.7.1)
+          ## PyTorch NPU Full Test - Shard ${{ matrix.shard }}/${{ env.NUM_SHARDS }}
 
-          | 指标 | 数值 |
+          | 项目 | 详情 |
           |------|------|
-          | Total tests | ${{ steps.summary.outputs.total || 'N/A' }} |
-          | Passed | ${{ steps.summary.outputs.passed || 'N/A' }} |
-          | Failed | ${{ steps.summary.outputs.failed || 'N/A' }} |
-          | Skipped | ${{ steps.summary.outputs.skipped || 'N/A' }} |
-
-          查看详细报告：test-summary artifact
+          | PyTorch | \`v${{ steps.install.outputs.torch_version }}\` |
+          | torch_npu | \`v${{ steps.install.outputs.torch_npu_version }}\` |
+          | Ascend/pytorch | [\`${{ steps.clone_ascend.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone_ascend.outputs.commit }}) |
+          | Patches applied | ${{ steps.apply_patches.outputs.patch_count }} |
+          | Shard | ${{ matrix.shard }} / ${{ env.NUM_SHARDS }} |
+          | 测试结果 | ${TEST_ICON} |
           EOF
