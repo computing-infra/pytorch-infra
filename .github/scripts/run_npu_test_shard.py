@@ -129,9 +129,12 @@ def run_pytest(
     verbose: bool
 ) -> Dict:
     """执行 pytest 并返回测试统计"""
+    # 转换为绝对路径
+    report_dir = os.path.abspath(report_dir)
+    test_dir = os.path.abspath(test_dir)
     os.makedirs(report_dir, exist_ok=True)
 
-    xml_report = os.path.abspath(os.path.join(report_dir, f'junit_shard_{shard}.xml'))
+    xml_report = os.path.join(report_dir, f'junit_shard_{shard}.xml')
     log_file = os.path.join(report_dir, f'test_shard_{shard}.log')
 
     # 构建 pytest 命令
