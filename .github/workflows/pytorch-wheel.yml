@@ -34,6 +34,12 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Fix git safe.directory
+        run: |
+          # 修复 container 环境下 git ownership 检查问题
+          git config --global --add safe.directory /__w/pytorch-infra/pytorch-infra
+          git config --global --add safe.directory '*'
+
       - name: Setup cache directories
         run: |
           mkdir -p ~/.cache/pip
