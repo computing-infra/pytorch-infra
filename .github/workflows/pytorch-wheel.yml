@@ -34,6 +34,12 @@ jobs:
           submodules: false
           fetch-depth: 0
 
+      - name: Fix git safe.directory
+        run: |
+          # 修复 container 环境下 git ownership 检查问题（必须在 submodule init 之前）
+          git config --global --add safe.directory /__w/pytorch-infra/pytorch-infra
+          git config --global --add safe.directory '*'
+
       - name: Initialize submodules (with retry)
         run: |
           # 子模块初始化带重试逻辑（GitHub HTTP 500 常见）
@@ -52,12 +58,6 @@ jobs:
             echo "Failed to initialize submodules after $MAX_RETRIES attempts"
             exit 1
           fi
-
-      - name: Fix git safe.directory
-        run: |
-          # 修复 container 环境下 git ownership 检查问题
-          git config --global --add safe.directory /__w/pytorch-infra/pytorch-infra
-          git config --global --add safe.directory '*'
 
       - name: Setup cache directories
         run: |
