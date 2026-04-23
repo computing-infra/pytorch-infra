@@ -9,16 +9,6 @@ on:
         description: 'PyTorch 分支/tag/commit (例如: main, v2.5.0, abc123)'
         required: false
         default: 'main'
-      python_version:
-        description: 'Python 版本'
-        required: false
-        default: 'cp311'
-        type: choice
-        options:
-          - cp310
-          - cp311
-          - cp312
-          - cp313
 
 jobs:
   build-x86:
