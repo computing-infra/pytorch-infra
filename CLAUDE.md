@@ -4,11 +4,12 @@
 
 ## 项目概述
 
-本仓库用于**每日集成验证** [Ascend/pytorch](https://gitcode.com/Ascend/pytorch.git) 与 PyTorch nightly 版本的编译兼容性，以及**代码静态扫描**。
+本仓库用于**每日集成验证** [Ascend/pytorch](https://gitcode.com/Ascend/pytorch.git) 与 PyTorch nightly 版本的编译兼容性，以及**代码静态扫描**，同时提供 [pytorch/pytorch](https://github.com/pytorch/pytorch) 的**wheel 构建**功能。
 
 ### 核心定位
 - **每日集成**：自动拉取 PyTorch nightly 和 Ascend/pytorch 最新代码进行编译验证
 - **代码扫描**：定期对 Ascend/pytorch 进行代码静态分析
+- **PyTorch 构建**：每日构建 pytorch/pytorch 的 CPU wheel（x86，多 Python 版本）
 - **问题追踪**：CI 失败或 lint 检查发现问题时，创建 issue 记录
 - **修复建议**：输出根本原因分析和修复建议，但**不需要直接修复或生成 patch**
 
@@ -37,6 +38,13 @@ gh workflow run npu-test.yml --repo computing-infra/pytorch-infra
 
 # 手动触发 lint 检查
 gh workflow run lint.yml --repo computing-infra/pytorch-infra
+
+# 手动触发 PyTorch wheel 构建
+gh workflow run pytorch-wheel.yml --repo computing-infra/pytorch-infra
+
+# 手动触发 PyTorch wheel 构建（指定参数）
+gh workflow run pytorch-wheel.yml --repo computing-infra/pytorch-infra \
+  -f pytorch_ref=v2.5.0 -f python_version=cp311
 
 # 查看失败运行的日志
 gh run view <run_id> --repo computing-infra/pytorch-infra --log-failed
@@ -95,10 +103,11 @@ fi
 
 | Workflow | 平台 | 环境 | 触发方式 | 用途 |
 |----------|------|------|----------|------|
-| `nightly-build.yml` | x86_64 | `ubuntu-22.04` | 每日三次 + 手动 | 编译验证（无 NPU） |
-| `nightly-build-arm.yml` | aarch64 | 自托管 NPU runner | 每日三次 + 手动 | ARM 编译验证 |
-| `npu-test.yml` | aarch64 | 自托管 NPU + Docker | 手动/PR | 构建 + NPU 真实测试 |
-| `lint.yml` | x86_64 | `ubuntu-22.04` | 每周一 + 手动 | 代码静态扫描 |
+| `nightly-build.yml` | x86_64 | `ubuntu-22.04` | 每日三次 + 手动 | Ascend/pytorch 编译验证（无 NPU） |
+| `nightly-build-arm.yml` | aarch64 | 自托管 NPU runner | 每日三次 + 手动 | Ascend/pytorch ARM 编译验证 |
+| `npu-test.yml` | aarch64 | 自托管 NPU + Docker | 手动/PR | Ascend/pytorch 构建 + NPU 真实测试 |
+| `lint.yml` | x86_64 | `ubuntu-22.04` | 每周一 + 手动 | Ascend/pytorch 代码静态扫描 |
+| `pytorch-wheel.yml` | x86_64 | PyTorch 官方镜像 | 每日一次 + 手动 | pytorch/pytorch wheel 构建 |
 
 ### nightly-build.yml（x86 编译验证）
 - **触发方式**：每日三次（UTC 22:00/03:00/08:00，即北京时间 06:00/11:00/16:00），或手动触发
@@ -127,6 +136,21 @@ fi
 - **运行环境**：`ubuntu-22.04`，Python 3.11
 - **检查流程**：克隆 → 应用 lint 配置 → lintrunner 扫描 → 生成报告
 - **可选输入**：`ascend_commit` 参数指定要扫描的 commit
+
+### pytorch-wheel.yml（PyTorch Wheel 构建）
+- **触发方式**：每日一次（UTC 22:00，北京时间次日 06:00），或手动触发
+- **运行环境**：`ubuntu-22.04` + PyTorch 官方镜像 `ghcr.io/pytorch/test-infra:cpu-x86_64-latest`
+- **特点**：使用 manylinux 镜像内置 Python，构建 CPU only wheel
+- **构建矩阵**：4 个 Python 版本（cp310, cp311, cp312, cp313）并行构建
+- **构建流程**：
+  1. Checkout pytorch/pytorch（含子模块）
+  2. 配置 sccache 编译缓存
+  3. 执行 `python setup.py build bdist_wheel`
+  4. auditwheel repair wheel
+  5. 上传 wheel 和构建日志
+- **手动触发参数**：
+  - `pytorch_ref`: 指定分支/tag/commit（默认 `main`）
+  - `python_version`: 指定 Python 版本（默认 `cp311`）
 
 ### Issue 追踪 (`issues/`)
 - 格式：`YYYY-MM-DD-NNN-<模块描述>.md`
