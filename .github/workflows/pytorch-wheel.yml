@@ -24,8 +24,9 @@ jobs:
     env:
       PYTHON_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/python
       PIP_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/pip
-      # 将 manylinux Python bin 目录放在 PATH 最前面
-      PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      # 保留 gcc-toolset-13 (GCC 13) 路径，同时将 manylinux Python bin 放在前面
+      PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin:/opt/rh/gcc-toolset-13/root/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      LD_LIBRARY_PATH: /opt/rh/gcc-toolset-13/root/usr/lib64:/opt/rh/gcc-toolset-13/root/usr/lib
 
     steps:
       - name: Checkout pytorch/pytorch (with retry)
