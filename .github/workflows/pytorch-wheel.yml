@@ -89,13 +89,11 @@ jobs:
           echo "USE_MKLDNN=1" >> $GITHUB_ENV
           echo "MAX_JOBS=$(nproc)" >> $GITHUB_ENV
           echo "BUILD_TEST=0" >> $GITHUB_ENV
-          echo "SCCACHE_CACHE_SIZE=50G" >> $GITHUB_ENV
 
-          # 配置 sccache（如果可用）
+          # 配置 sccache（镜像已预配置，无需手动设置 CC/CXX）
           if command -v sccache &> /dev/null; then
-            echo "CC=sccache gcc" >> $GITHUB_ENV
-            echo "CXX=sccache g++" >> $GITHUB_ENV
             echo "SCCACHE_DIR=~/.cache/sccache" >> $GITHUB_ENV
+            echo "SCCACHE_CACHE_SIZE=50G" >> $GITHUB_ENV
             sccache --zero-stats 2>/dev/null || true
           fi
 
