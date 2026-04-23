@@ -24,6 +24,8 @@ jobs:
     env:
       PYTHON_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/python
       PIP_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/pip
+      # 将 manylinux Python bin 目录放在 PATH 最前面
+      PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
     steps:
       - name: Checkout pytorch/pytorch (with retry)
@@ -88,9 +90,9 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          # 使用 --python 参数确保 pip 安装到 manylinux Python 的 site-packages
-          ${{ env.PIP_PATH }} --python ${{ env.PYTHON_PATH }} install --upgrade pip
-          ${{ env.PIP_PATH }} --python ${{ env.PYTHON_PATH }} install -r requirements-build.txt
+          # PATH 已设置到 manylinux Python bin，pip 直接安装到正确位置
+          pip install --upgrade pip
+          pip install -r requirements-build.txt
 
       - name: Configure build environment
         id: config
