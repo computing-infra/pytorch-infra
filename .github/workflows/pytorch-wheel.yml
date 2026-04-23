@@ -26,13 +26,32 @@ jobs:
       PIP_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/pip
 
     steps:
-      - name: Checkout pytorch/pytorch
+      - name: Checkout pytorch/pytorch (with retry)
         uses: actions/checkout@v4
         with:
           repository: pytorch/pytorch
           ref: ${{ github.event.inputs.pytorch_ref || 'main' }}
-          submodules: recursive
+          submodules: false
           fetch-depth: 0
+
+      - name: Initialize submodules (with retry)
+        run: |
+          # 子模块初始化带重试逻辑（GitHub HTTP 500 常见）
+          MAX_RETRIES=5
+          RETRY_DELAY=30
+
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i of $MAX_RETRIES: Initializing submodules..."
+            git submodule update --init --recursive && break
+            echo "Failed, retrying in $RETRY_DELAY seconds..."
+            sleep $RETRY_DELAY
+          done
+
+          # 检查是否成功
+          if [ $? -ne 0 ]; then
+            echo "Failed to initialize submodules after $MAX_RETRIES attempts"
+            exit 1
+          fi
 
       - name: Fix git safe.directory
         run: |
