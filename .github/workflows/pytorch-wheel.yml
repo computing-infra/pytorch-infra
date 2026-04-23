@@ -61,10 +61,12 @@ jobs:
           restore-keys: |
             sccache-x86-${{ matrix.python }}-
 
-      - name: Install Python dependencies
+      - name: Install Python build dependencies
         run: |
-          ${{ env.PIP_PATH }} install --upgrade pip setuptools wheel
-          ${{ env.PIP_PATH }} install numpy pyyaml typing_extensions
+          # 安装构建依赖（参考 pyproject.toml [build-system] requires）
+          # 使用 -r requirements-build.txt 可以一键安装所有构建依赖
+          ${{ env.PIP_PATH }} install --upgrade pip
+          ${{ env.PIP_PATH }} install -r requirements-build.txt
 
       - name: Configure build environment
         id: config
@@ -78,6 +80,7 @@ jobs:
           # 配置构建环境变量
           echo "USE_CUDA=0" >> $GITHUB_ENV
           echo "USE_DISTRIBUTED=1" >> $GITHUB_ENV
+          echo "USE_MKLDNN=1" >> $GITHUB_ENV
           echo "MAX_JOBS=$(nproc)" >> $GITHUB_ENV
           echo "BUILD_TEST=0" >> $GITHUB_ENV
           echo "SCCACHE_CACHE_SIZE=50G" >> $GITHUB_ENV
@@ -95,8 +98,11 @@ jobs:
       - name: Build wheel
         id: build
         run: |
-          # 构建 wheel
-          ${{ env.PYTHON_PATH }} setup.py build bdist_wheel 2>&1 | tee /tmp/build.log
+          # 清理之前的构建（官方流程）
+          ${{ env.PYTHON_PATH }} setup.py clean
+
+          # 使用官方构建命令（python -m build --wheel --no-isolation）
+          ${{ env.PYTHON_PATH }} -m build --wheel --no-isolation 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
 
           # 获取 sccache 统计信息
