@@ -69,13 +69,9 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          # 获取 manylinux Python 的实际版本号
-          PY_VER=$(${{ env.PYTHON_PATH }} -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          SITE_PACKAGES=/opt/python/${{ matrix.python }}-${{ matrix.python }}/lib/python${PY_VER}/site-packages
-
-          # 安装构建依赖到 manylinux Python 的 site-packages
+          # manylinux pip 默认安装到正确的 site-packages，无需 --target
           ${{ env.PIP_PATH }} install --upgrade pip
-          ${{ env.PIP_PATH }} install --target ${SITE_PACKAGES} -r requirements-build.txt
+          ${{ env.PIP_PATH }} install -r requirements-build.txt
 
       - name: Configure build environment
         id: config
