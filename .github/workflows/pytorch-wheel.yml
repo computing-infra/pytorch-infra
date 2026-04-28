@@ -9,10 +9,20 @@ on:
         description: 'PyTorch 分支/tag/commit (例如: main, v2.5.0, abc123)'
         required: false
         default: 'main'
+      platform:
+        description: '构建平台 (all, x86, arm)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - x86
+          - arm
 
 jobs:
   build-x86:
     name: Build PyTorch (x86_64, Python ${{ matrix.python }})
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'x86' || github.event.inputs.platform == ''
     runs-on: ubuntu-22.04
     container:
       image: ghcr.io/pytorch/test-infra:cpu-x86_64-latest
@@ -197,19 +207,221 @@ jobs:
           $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
           EOF
 
+  build-arm:
+    name: Build PyTorch (aarch64, Python ${{ matrix.python }})
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'arm' || github.event.inputs.platform == ''
+    runs-on: ubuntu-22.04-arm
+    container:
+      image: ghcr.io/pytorch/test-infra:cpu-aarch64-latest
+      options: --user root
+    strategy:
+      fail-fast: false
+      matrix:
+        python: [cp310, cp311, cp312, cp313]
+    env:
+      PYTHON_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/python
+      PIP_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/pip
+      # 保留 gcc-toolset-13 (GCC 13) 路径，同时将 manylinux Python bin 放在前面
+      PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin:/opt/rh/gcc-toolset-13/root/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      LD_LIBRARY_PATH: /opt/rh/gcc-toolset-13/root/usr/lib64:/opt/rh/gcc-toolset-13/root/usr/lib:/opt/OpenBLAS/lib
+
+    steps:
+      - name: Checkout pytorch/pytorch (with retry)
+        uses: actions/checkout@v4
+        with:
+          repository: pytorch/pytorch
+          ref: ${{ github.event.inputs.pytorch_ref || 'main' }}
+          submodules: false
+          fetch-depth: 0
+
+      - name: Fix git safe.directory
+        run: |
+          # 修复 container 环境下 git ownership 检查问题（必须在 submodule init 之前）
+          git config --global --add safe.directory /__w/pytorch-infra/pytorch-infra
+          git config --global --add safe.directory '*'
+
+      - name: Initialize submodules (with retry)
+        run: |
+          # 子模块初始化带重试逻辑（GitHub HTTP 500 常见）
+          MAX_RETRIES=5
+          RETRY_DELAY=30
+
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i of $MAX_RETRIES: Initializing submodules..."
+            git submodule update --init --recursive && break
+            echo "Failed, retrying in $RETRY_DELAY seconds..."
+            sleep $RETRY_DELAY
+          done
+
+          # 检查是否成功
+          if [ $? -ne 0 ]; then
+            echo "Failed to initialize submodules after $MAX_RETRIES attempts"
+            exit 1
+          fi
+
+      - name: Setup cache directories
+        run: |
+          mkdir -p ~/.cache/pip
+          mkdir -p ~/.cache/sccache
+          chmod -R 777 ~/.cache
+
+      - name: Verify sccache availability
+        run: |
+          which sccache && sccache --version || echo "sccache not found, will use direct compilation"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-arm-${{ matrix.python }}-pytorch-${{ github.sha }}
+          restore-keys: |
+            pip-arm-${{ matrix.python }}-pytorch-
+            pip-arm-${{ matrix.python }}-
+
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: sccache-arm-${{ matrix.python }}-${{ github.sha }}
+          restore-keys: |
+            sccache-arm-${{ matrix.python }}-
+
+      - name: Install Python build dependencies
+        run: |
+          # PATH 已设置到 manylinux Python bin，pip 直接安装到正确位置
+          pip install --upgrade pip
+          pip install -r requirements-build.txt
+
+      - name: Configure build environment
+        id: config
+        run: |
+          PYTORCH_COMMIT=$(git rev-parse --short HEAD)
+          PYTORCH_COMMIT_DATE=$(git log -1 --format='%ci')
+
+          echo "commit_short=${PYTORCH_COMMIT}" >> $GITHUB_OUTPUT
+          echo "commit_date=${PYTORCH_COMMIT_DATE}" >> $GITHUB_OUTPUT
+
+          # 配置构建环境变量（ARM CPU only）
+          echo "USE_CUDA=0" >> $GITHUB_ENV
+          echo "USE_DISTRIBUTED=1" >> $GITHUB_ENV
+          echo "USE_MKLDNN=0" >> $GITHUB_ENV  # MKLDNN 在 ARM 上不支持
+          echo "MAX_JOBS=$(nproc)" >> $GITHUB_ENV
+          echo "BUILD_TEST=0" >> $GITHUB_ENV
+
+          # 配置 sccache（镜像已预配置，无需手动设置 CC/CXX）
+          if command -v sccache &> /dev/null; then
+            echo "SCCACHE_DIR=~/.cache/sccache" >> $GITHUB_ENV
+            echo "SCCACHE_CACHE_SIZE=50G" >> $GITHUB_ENV
+            sccache --zero-stats 2>/dev/null || true
+          fi
+
+          echo "PyTorch commit: ${PYTORCH_COMMIT} (${PYTORCH_COMMIT_DATE})"
+
+      - name: Build wheel
+        id: build
+        run: |
+          # 清理之前的构建（官方流程）
+          ${{ env.PYTHON_PATH }} setup.py clean
+
+          # 使用官方构建命令（python -m build --wheel --no-isolation）
+          ${{ env.PYTHON_PATH }} -m build --wheel --no-isolation 2>&1 | tee /tmp/build.log
+          BUILD_STATUS=${PIPESTATUS[0]}
+
+          # 获取 sccache 统计信息
+          if command -v sccache &> /dev/null; then
+            SCCACHE_STATS=$(sccache -s 2>/dev/null | grep -E "cache hits|cache misses|Cache size" | tr '\n' ' ' || echo 'N/A')
+            echo "sccache_stats=${SCCACHE_STATS}" >> $GITHUB_OUTPUT
+            sccache -s || true
+          else
+            echo "sccache_stats=N/A" >> $GITHUB_OUTPUT
+          fi
+
+          echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
+          if [ ${BUILD_STATUS} -eq 0 ]; then
+            WHL=$(ls dist/*.whl 2>/dev/null | head -1)
+            echo "wheel=${WHL}" >> $GITHUB_OUTPUT
+            echo "Build succeeded: ${WHL}"
+          fi
+          exit ${BUILD_STATUS}
+
+      - name: Repair wheel with auditwheel
+        if: steps.build.outputs.status == '0'
+        run: |
+          mkdir -p wheelhouse
+          auditwheel repair dist/*.whl -w wheelhouse/
+
+          echo "=== Repaired wheels ==="
+          ls -la wheelhouse/
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-arm-${{ matrix.python }}-${{ github.run_number }}
+          path: /tmp/build.log
+          if-no-files-found: warn
+
+      - name: Upload wheel
+        if: steps.build.outputs.status == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytorch-wheel-arm-${{ matrix.python }}-${{ github.run_number }}
+          path: wheelhouse/*.whl
+          if-no-files-found: warn
+
+      - name: Build summary
+        if: always()
+        run: |
+          BUILD_STATUS="${{ steps.build.outputs.status }}"
+          if [ "${BUILD_STATUS}" = "0" ]; then
+            STATUS_ICON="✅ SUCCESS"
+          else
+            STATUS_ICON="❌ FAILED"
+          fi
+
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## PyTorch Wheel Build (aarch64)
+
+          | 项目 | 详情 |
+          |------|------|
+          | 构建时间 | $(date -u '+%Y-%m-%d %H:%M UTC') |
+          | Python 版本 | \`${{ matrix.python }}\` |
+          | PyTorch Commit | \`${{ steps.config.outputs.commit_short }}\` |
+          | Commit 时间 | ${{ steps.config.outputs.commit_date }} |
+          | sccache 统计 | ${{ steps.build.outputs.sccache_stats || 'N/A' }} |
+          | 构建结果 | ${STATUS_ICON} |
+
+          $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
+          EOF
+
   build-summary:
     name: Build Summary
-    needs: [build-x86]
+    needs: [build-x86, build-arm]
     if: always()
     runs-on: ubuntu-22.04
 
     steps:
       - name: Summary
         run: |
+          PLATFORM="${{ github.event.inputs.platform || 'all' }}"
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ## PyTorch Wheel Build Summary
 
-          本次构建共启动 4 个并行任务（x86_64, cp310/cp311/cp312/cp313）
+          **构建平台**: ${PLATFORM}
+          **PyTorch Ref**: \`${{ github.event.inputs.pytorch_ref || 'main' }}\`
 
-          请查看各 build-x86 job 的详细结果和产物。
+          | 平台 | Python 版本 | Job 名称 |
+          |------|-------------|----------|
+          $( if [ "${PLATFORM}" = "all" ] || [ "${PLATFORM}" = "x86" ] || [ "${PLATFORM}" = "" ]; then \
+            for py in cp310 cp311 cp312 cp313; do \
+              echo "| x86_64 | ${py} | build-x86 (Python ${py}) |"; \
+            done; \
+          fi )
+          $( if [ "${PLATFORM}" = "all" ] || [ "${PLATFORM}" = "arm" ] || [ "${PLATFORM}" = "" ]; then \
+            for py in cp310 cp311 cp312 cp313; do \
+              echo "| aarch64 | ${py} | build-arm (Python ${py}) |"; \
+            done; \
+          fi )
+
+          请查看各 job 的详细结果和产物（wheel 文件、构建日志）。
           EOF

@@ -44,7 +44,11 @@ gh workflow run pytorch-wheel.yml --repo computing-infra/pytorch-infra
 
 # 手动触发 PyTorch wheel 构建（指定参数）
 gh workflow run pytorch-wheel.yml --repo computing-infra/pytorch-infra \
-  -f pytorch_ref=v2.5.0 -f python_version=cp311
+  -f pytorch_ref=v2.5.0 -f platform=x86
+
+# 手动触发 PyTorch wheel 构建（仅 ARM）
+gh workflow run pytorch-wheel.yml --repo computing-infra/pytorch-infra \
+  -f platform=arm
 
 # 查看失败运行的日志
 gh run view <run_id> --repo computing-infra/pytorch-infra --log-failed
@@ -107,7 +111,7 @@ fi
 | `nightly-build-arm.yml` | aarch64 | 自托管 NPU runner | 每日三次 + 手动 | Ascend/pytorch ARM 编译验证 |
 | `npu-test.yml` | aarch64 | 自托管 NPU + Docker | 手动/PR | Ascend/pytorch 构建 + NPU 真实测试 |
 | `lint.yml` | x86_64 | `ubuntu-22.04` | 每周一 + 手动 | Ascend/pytorch 代码静态扫描 |
-| `pytorch-wheel.yml` | x86_64 | PyTorch 官方镜像 | 每日一次 + 手动 | pytorch/pytorch wheel 构建 |
+| `pytorch-wheel.yml` | x86_64 + aarch64 | PyTorch 官方镜像 | 每日一次 + 手动 | pytorch/pytorch wheel 构建（多平台） |
 
 ### nightly-build.yml（x86 编译验证）
 - **触发方式**：每日三次（UTC 22:00/03:00/08:00，即北京时间 06:00/11:00/16:00），或手动触发
@@ -139,9 +143,13 @@ fi
 
 ### pytorch-wheel.yml（PyTorch Wheel 构建）
 - **触发方式**：每日一次（UTC 22:00，北京时间次日 06:00），或手动触发
-- **运行环境**：`ubuntu-22.04` + PyTorch 官方镜像 `ghcr.io/pytorch/test-infra:cpu-x86_64-latest`
+- **运行环境**：
+  - x86: `ubuntu-22.04` + PyTorch 官方镜像 `ghcr.io/pytorch/test-infra:cpu-x86_64-latest`
+  - ARM: `ubuntu-22.04-arm` + PyTorch 官方镜像 `ghcr.io/pytorch/test-infra:cpu-aarch64-latest`
 - **特点**：使用 manylinux 镜像内置 Python，构建 CPU only wheel
-- **构建矩阵**：4 个 Python 版本（cp310, cp311, cp312, cp313）并行构建
+- **构建矩阵**：
+  - x86: 4 个 Python 版本（cp310, cp311, cp312, cp313）并行构建
+  - ARM: 4 个 Python 版本（cp310, cp311, cp312, cp313）并行构建
 - **构建流程**：
   1. Checkout pytorch/pytorch（含子模块）
   2. 配置 sccache 编译缓存
@@ -150,7 +158,7 @@ fi
   5. 上传 wheel 和构建日志
 - **手动触发参数**：
   - `pytorch_ref`: 指定分支/tag/commit（默认 `main`）
-  - `python_version`: 指定 Python 版本（默认 `cp311`）
+  - `platform`: 选择构建平台（`all`/`x86`/`arm`，默认 `all`）
 
 ### Issue 追踪 (`issues/`)
 - 格式：`YYYY-MM-DD-NNN-<模块描述>.md`
