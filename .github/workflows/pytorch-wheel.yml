@@ -39,6 +39,20 @@ jobs:
       LD_LIBRARY_PATH: /opt/rh/gcc-toolset-13/root/usr/lib64:/opt/rh/gcc-toolset-13/root/usr/lib
 
     steps:
+      - name: Free disk space
+        run: |
+          # Container 模式下无法清理宿主机预装软件（dotnet/android 等）
+          # 仅清理容器内可清理的缓存，释放部分空间
+          echo "=== Disk space before cleanup ==="
+          df -h
+
+          rm -rf ~/.cache/pip/* 2>/dev/null || true
+          rm -rf ~/.npm 2>/dev/null || true
+          rm -rf ~/go 2>/dev/null || true
+
+          echo "=== Disk space after cleanup ==="
+          df -h
+
       - name: Checkout pytorch/pytorch (with retry)
         uses: actions/checkout@v4
         with:
@@ -114,17 +128,17 @@ jobs:
           echo "commit_short=${PYTORCH_COMMIT}" >> $GITHUB_OUTPUT
           echo "commit_date=${PYTORCH_COMMIT_DATE}" >> $GITHUB_OUTPUT
 
-          # 配置构建环境变量
+          # 配置构建环境变量（优化磁盘空间使用）
           echo "USE_CUDA=0" >> $GITHUB_ENV
           echo "USE_DISTRIBUTED=1" >> $GITHUB_ENV
           echo "USE_MKLDNN=1" >> $GITHUB_ENV
-          echo "MAX_JOBS=$(nproc)" >> $GITHUB_ENV
+          echo "MAX_JOBS=2" >> $GITHUB_ENV  # 减少并行编译数，降低磁盘峰值占用
           echo "BUILD_TEST=0" >> $GITHUB_ENV
 
           # 配置 sccache（镜像已预配置，无需手动设置 CC/CXX）
           if command -v sccache &> /dev/null; then
             echo "SCCACHE_DIR=~/.cache/sccache" >> $GITHUB_ENV
-            echo "SCCACHE_CACHE_SIZE=50G" >> $GITHUB_ENV
+            echo "SCCACHE_CACHE_SIZE=5G" >> $GITHUB_ENV  # 降低缓存大小，节省磁盘空间
             sccache --zero-stats 2>/dev/null || true
           fi
 
@@ -133,6 +147,10 @@ jobs:
       - name: Build wheel
         id: build
         run: |
+          # 记录构建开始时间
+          BUILD_START=$(date +%s)
+          echo "build_start=${BUILD_START}" >> $GITHUB_OUTPUT
+
           # 清理之前的构建（官方流程）
           ${{ env.PYTHON_PATH }} setup.py clean
 
@@ -140,22 +158,72 @@ jobs:
           ${{ env.PYTHON_PATH }} -m build --wheel --no-isolation 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
 
-          # 获取 sccache 统计信息
+          # 记录构建结束时间
+          BUILD_END=$(date +%s)
+          BUILD_DURATION=$((BUILD_END - BUILD_START))
+          echo "build_end=${BUILD_END}" >> $GITHUB_OUTPUT
+          echo "build_duration=${BUILD_DURATION}" >> $GITHUB_OUTPUT
+
+          # 获取 sccache 详细统计信息
           if command -v sccache &> /dev/null; then
-            SCCACHE_STATS=$(sccache -s 2>/dev/null | grep -E "cache hits|cache misses|Cache size" | tr '\n' ' ' || echo 'N/A')
-            echo "sccache_stats=${SCCACHE_STATS}" >> $GITHUB_OUTPUT
+            # 提取缓存命中率和详细统计
+            SCCACHE_OUTPUT=$(sccache -s 2>/dev/null || echo "")
+
+            # 解析统计数据
+            CACHE_HITS=$(echo "$SCCACHE_OUTPUT" | grep -E "^Cache hits" | awk '{print $3}' || echo "0")
+            CACHE_MISSES=$(echo "$SCCACHE_OUTPUT" | grep -E "^Cache misses" | awk '{print $3}' || echo "0")
+            CACHE_SIZE=$(echo "$SCCACHE_OUTPUT" | grep -E "^Cache size" | awk '{print $3,$4}' || echo "0 GB")
+
+            # 计算命中率（避免除零）
+            if [ "$CACHE_HITS" != "0" ] || [ "$CACHE_MISSES" != "0" ]; then
+              TOTAL=$((CACHE_HITS + CACHE_MISSES))
+              HIT_RATE=$(awk "BEGIN {printf \"%.1f\", ($CACHE_HITS / $TOTAL) * 100}")
+            else
+              HIT_RATE="0.0"
+            fi
+
+            echo "cache_hits=${CACHE_HITS}" >> $GITHUB_OUTPUT
+            echo "cache_misses=${CACHE_MISSES}" >> $GITHUB_OUTPUT
+            echo "cache_hit_rate=${HIT_RATE}" >> $GITHUB_OUTPUT
+            echo "cache_size=${CACHE_SIZE}" >> $GITHUB_OUTPUT
+
+            # 输出完整统计供调试
             sccache -s || true
           else
-            echo "sccache_stats=N/A" >> $GITHUB_OUTPUT
+            echo "cache_hits=N/A" >> $GITHUB_OUTPUT
+            echo "cache_misses=N/A" >> $GITHUB_OUTPUT
+            echo "cache_hit_rate=N/A" >> $GITHUB_OUTPUT
+            echo "cache_size=N/A" >> $GITHUB_OUTPUT
           fi
 
           echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
           if [ ${BUILD_STATUS} -eq 0 ]; then
             WHL=$(ls dist/*.whl 2>/dev/null | head -1)
+            WHL_SIZE=$(ls -lh "$WHL" 2>/dev/null | awk '{print $5}' || echo "N/A")
             echo "wheel=${WHL}" >> $GITHUB_OUTPUT
-            echo "Build succeeded: ${WHL}"
+            echo "wheel_size=${WHL_SIZE}" >> $GITHUB_OUTPUT
+            echo "Build succeeded: ${WHL} (${WHL_SIZE})"
           fi
           exit ${BUILD_STATUS}
+
+      - name: Clean build artifacts (save disk space)
+        if: steps.build.outputs.status == '0'
+        run: |
+          echo "=== Disk space before cleanup ==="
+          df -h
+
+          # 清理 build 目录中的中间文件（保留必要的产物）
+          # 删除 .o 文件、CMakeCache 等可以显著减少磁盘占用
+          find build -name "*.o" -type f -delete 2>/dev/null || true
+          find build -name "CMakeCache.txt" -type f -delete 2>/dev/null || true
+          find build -name "*.ninja_deps" -type f -delete 2>/dev/null || true
+          find build -name "*.ninja_log" -type f -delete 2>/dev/null || true
+
+          # 清理 sccache 临时文件
+          rm -rf ~/.cache/sccache/*.tmp 2>/dev/null || true
+
+          echo "=== Disk space after cleanup ==="
+          df -h
 
       - name: Repair wheel with auditwheel
         if: steps.build.outputs.status == '0'
@@ -192,19 +260,57 @@ jobs:
             STATUS_ICON="❌ FAILED"
           fi
 
+          # 格式化编译耗时
+          BUILD_DURATION="${{ steps.build.outputs.build_duration }}"
+          if [ "${BUILD_DURATION}" != "" ] && [ "${BUILD_DURATION}" -gt 0 ]; then
+            HOURS=$((BUILD_DURATION / 3600))
+            MINUTES=$(((BUILD_DURATION % 3600) / 60))
+            SECONDS=$((BUILD_DURATION % 60))
+            DURATION_STR="${HOURS}h ${MINUTES}m ${SECONDS}s"
+          else
+            DURATION_STR="N/A"
+          fi
+
+          # 缓存命中率
+          HIT_RATE="${{ steps.build.outputs.cache_hit_rate }}"
+          if [ "${HIT_RATE}" != "N/A" ] && [ "${HIT_RATE}" != "" ]; then
+            HIT_RATE_STR="${HIT_RATE}%"
+          else
+            HIT_RATE_STR="N/A"
+          fi
+
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ## PyTorch Wheel Build (x86_64)
 
+          ### 编译信息
           | 项目 | 详情 |
           |------|------|
-          | 构建时间 | $(date -u '+%Y-%m-%d %H:%M UTC') |
           | Python 版本 | \`${{ matrix.python }}\` |
           | PyTorch Commit | \`${{ steps.config.outputs.commit_short }}\` |
           | Commit 时间 | ${{ steps.config.outputs.commit_date }} |
-          | sccache 统计 | ${{ steps.build.outputs.sccache_stats || 'N/A' }} |
+          | 编译耗时 | ${DURATION_STR} |
           | 构建结果 | ${STATUS_ICON} |
 
-          $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
+          ### 缓存统计
+          | 项目 | 详情 |
+          |------|------|
+          | 缓存命中率 | ${HIT_RATE_STR} |
+          | Cache Hits | ${{ steps.build.outputs.cache_hits || 'N/A' }} |
+          | Cache Misses | ${{ steps.build.outputs.cache_misses || 'N/A' }} |
+          | Cache Size | ${{ steps.build.outputs.cache_size || 'N/A' }} |
+
+          $( if [ "${BUILD_STATUS}" = "0" ]; then \
+            echo "### 构建产物"; \
+            echo "| 项目 | 详情 |"; \
+            echo "|------|------|"; \
+            echo "| Wheel 文件 | \`${{ steps.build.outputs.wheel }}\` |"; \
+            echo "| 文件大小 | ${{ steps.build.outputs.wheel_size || 'N/A' }} |"; \
+            echo ""; \
+            echo "> 📦 产物已上传至 artifact: \`pytorch-wheel-x86-${{ matrix.python }}-${{ github.run_number }}\`"; \
+          else \
+            echo ""; \
+            echo "> 🔍 查看 build-log artifact 获取详细错误信息"; \
+          fi )
           EOF
 
   build-arm:
@@ -226,6 +332,20 @@ jobs:
       LD_LIBRARY_PATH: /opt/rh/gcc-toolset-13/root/usr/lib64:/opt/rh/gcc-toolset-13/root/usr/lib:/opt/OpenBLAS/lib
 
     steps:
+      - name: Free disk space
+        run: |
+          # Container 模式下无法清理宿主机预装软件（dotnet/android 等）
+          # 仅清理容器内可清理的缓存，释放部分空间
+          echo "=== Disk space before cleanup ==="
+          df -h
+
+          rm -rf ~/.cache/pip/* 2>/dev/null || true
+          rm -rf ~/.npm 2>/dev/null || true
+          rm -rf ~/go 2>/dev/null || true
+
+          echo "=== Disk space after cleanup ==="
+          df -h
+
       - name: Checkout pytorch/pytorch (with retry)
         uses: actions/checkout@v4
         with:
@@ -301,17 +421,17 @@ jobs:
           echo "commit_short=${PYTORCH_COMMIT}" >> $GITHUB_OUTPUT
           echo "commit_date=${PYTORCH_COMMIT_DATE}" >> $GITHUB_OUTPUT
 
-          # 配置构建环境变量（ARM CPU only）
+          # 配置构建环境变量（ARM CPU only，优化磁盘空间使用）
           echo "USE_CUDA=0" >> $GITHUB_ENV
           echo "USE_DISTRIBUTED=1" >> $GITHUB_ENV
           echo "USE_MKLDNN=0" >> $GITHUB_ENV  # MKLDNN 在 ARM 上不支持
-          echo "MAX_JOBS=$(nproc)" >> $GITHUB_ENV
+          echo "MAX_JOBS=2" >> $GITHUB_ENV  # 减少并行编译数，降低磁盘峰值占用
           echo "BUILD_TEST=0" >> $GITHUB_ENV
 
           # 配置 sccache（镜像已预配置，无需手动设置 CC/CXX）
           if command -v sccache &> /dev/null; then
             echo "SCCACHE_DIR=~/.cache/sccache" >> $GITHUB_ENV
-            echo "SCCACHE_CACHE_SIZE=50G" >> $GITHUB_ENV
+            echo "SCCACHE_CACHE_SIZE=5G" >> $GITHUB_ENV  # 降低缓存大小，节省磁盘空间
             sccache --zero-stats 2>/dev/null || true
           fi
 
@@ -320,6 +440,10 @@ jobs:
       - name: Build wheel
         id: build
         run: |
+          # 记录构建开始时间
+          BUILD_START=$(date +%s)
+          echo "build_start=${BUILD_START}" >> $GITHUB_OUTPUT
+
           # 清理之前的构建（官方流程）
           ${{ env.PYTHON_PATH }} setup.py clean
 
@@ -327,22 +451,72 @@ jobs:
           ${{ env.PYTHON_PATH }} -m build --wheel --no-isolation 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
 
-          # 获取 sccache 统计信息
+          # 记录构建结束时间
+          BUILD_END=$(date +%s)
+          BUILD_DURATION=$((BUILD_END - BUILD_START))
+          echo "build_end=${BUILD_END}" >> $GITHUB_OUTPUT
+          echo "build_duration=${BUILD_DURATION}" >> $GITHUB_OUTPUT
+
+          # 获取 sccache 详细统计信息
           if command -v sccache &> /dev/null; then
-            SCCACHE_STATS=$(sccache -s 2>/dev/null | grep -E "cache hits|cache misses|Cache size" | tr '\n' ' ' || echo 'N/A')
-            echo "sccache_stats=${SCCACHE_STATS}" >> $GITHUB_OUTPUT
+            # 提取缓存命中率和详细统计
+            SCCACHE_OUTPUT=$(sccache -s 2>/dev/null || echo "")
+
+            # 解析统计数据
+            CACHE_HITS=$(echo "$SCCACHE_OUTPUT" | grep -E "^Cache hits" | awk '{print $3}' || echo "0")
+            CACHE_MISSES=$(echo "$SCCACHE_OUTPUT" | grep -E "^Cache misses" | awk '{print $3}' || echo "0")
+            CACHE_SIZE=$(echo "$SCCACHE_OUTPUT" | grep -E "^Cache size" | awk '{print $3,$4}' || echo "0 GB")
+
+            # 计算命中率（避免除零）
+            if [ "$CACHE_HITS" != "0" ] || [ "$CACHE_MISSES" != "0" ]; then
+              TOTAL=$((CACHE_HITS + CACHE_MISSES))
+              HIT_RATE=$(awk "BEGIN {printf \"%.1f\", ($CACHE_HITS / $TOTAL) * 100}")
+            else
+              HIT_RATE="0.0"
+            fi
+
+            echo "cache_hits=${CACHE_HITS}" >> $GITHUB_OUTPUT
+            echo "cache_misses=${CACHE_MISSES}" >> $GITHUB_OUTPUT
+            echo "cache_hit_rate=${HIT_RATE}" >> $GITHUB_OUTPUT
+            echo "cache_size=${CACHE_SIZE}" >> $GITHUB_OUTPUT
+
+            # 输出完整统计供调试
             sccache -s || true
           else
-            echo "sccache_stats=N/A" >> $GITHUB_OUTPUT
+            echo "cache_hits=N/A" >> $GITHUB_OUTPUT
+            echo "cache_misses=N/A" >> $GITHUB_OUTPUT
+            echo "cache_hit_rate=N/A" >> $GITHUB_OUTPUT
+            echo "cache_size=N/A" >> $GITHUB_OUTPUT
           fi
 
           echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
           if [ ${BUILD_STATUS} -eq 0 ]; then
             WHL=$(ls dist/*.whl 2>/dev/null | head -1)
+            WHL_SIZE=$(ls -lh "$WHL" 2>/dev/null | awk '{print $5}' || echo "N/A")
             echo "wheel=${WHL}" >> $GITHUB_OUTPUT
-            echo "Build succeeded: ${WHL}"
+            echo "wheel_size=${WHL_SIZE}" >> $GITHUB_OUTPUT
+            echo "Build succeeded: ${WHL} (${WHL_SIZE})"
           fi
           exit ${BUILD_STATUS}
+
+      - name: Clean build artifacts (save disk space)
+        if: steps.build.outputs.status == '0'
+        run: |
+          echo "=== Disk space before cleanup ==="
+          df -h
+
+          # 清理 build 目录中的中间文件（保留必要的产物）
+          # 删除 .o 文件、CMakeCache 等可以显著减少磁盘占用
+          find build -name "*.o" -type f -delete 2>/dev/null || true
+          find build -name "CMakeCache.txt" -type f -delete 2>/dev/null || true
+          find build -name "*.ninja_deps" -type f -delete 2>/dev/null || true
+          find build -name "*.ninja_log" -type f -delete 2>/dev/null || true
+
+          # 清理 sccache 临时文件
+          rm -rf ~/.cache/sccache/*.tmp 2>/dev/null || true
+
+          echo "=== Disk space after cleanup ==="
+          df -h
 
       - name: Repair wheel with auditwheel
         if: steps.build.outputs.status == '0'
@@ -379,24 +553,504 @@ jobs:
             STATUS_ICON="❌ FAILED"
           fi
 
+          # 格式化编译耗时
+          BUILD_DURATION="${{ steps.build.outputs.build_duration }}"
+          if [ "${BUILD_DURATION}" != "" ] && [ "${BUILD_DURATION}" -gt 0 ]; then
+            HOURS=$((BUILD_DURATION / 3600))
+            MINUTES=$(((BUILD_DURATION % 3600) / 60))
+            SECONDS=$((BUILD_DURATION % 60))
+            DURATION_STR="${HOURS}h ${MINUTES}m ${SECONDS}s"
+          else
+            DURATION_STR="N/A"
+          fi
+
+          # 缓存命中率
+          HIT_RATE="${{ steps.build.outputs.cache_hit_rate }}"
+          if [ "${HIT_RATE}" != "N/A" ] && [ "${HIT_RATE}" != "" ]; then
+            HIT_RATE_STR="${HIT_RATE}%"
+          else
+            HIT_RATE_STR="N/A"
+          fi
+
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ## PyTorch Wheel Build (aarch64)
 
+          ### 编译信息
           | 项目 | 详情 |
           |------|------|
-          | 构建时间 | $(date -u '+%Y-%m-%d %H:%M UTC') |
           | Python 版本 | \`${{ matrix.python }}\` |
           | PyTorch Commit | \`${{ steps.config.outputs.commit_short }}\` |
           | Commit 时间 | ${{ steps.config.outputs.commit_date }} |
-          | sccache 统计 | ${{ steps.build.outputs.sccache_stats || 'N/A' }} |
+          | 编译耗时 | ${DURATION_STR} |
           | 构建结果 | ${STATUS_ICON} |
 
-          $( [ "${BUILD_STATUS}" = "0" ] && echo "> Wheel: \`${{ steps.build.outputs.wheel }}\`" || echo "> 查看 build-log artifact 获取详细错误信息" )
+          ### 缓存统计
+          | 项目 | 详情 |
+          |------|------|
+          | 缓存命中率 | ${HIT_RATE_STR} |
+          | Cache Hits | ${{ steps.build.outputs.cache_hits || 'N/A' }} |
+          | Cache Misses | ${{ steps.build.outputs.cache_misses || 'N/A' }} |
+          | Cache Size | ${{ steps.build.outputs.cache_size || 'N/A' }} |
+
+          $( if [ "${BUILD_STATUS}" = "0" ]; then \
+            echo "### 构建产物"; \
+            echo "| 项目 | 详情 |"; \
+            echo "|------|------|"; \
+            echo "| Wheel 文件 | \`${{ steps.build.outputs.wheel }}\` |"; \
+            echo "| 文件大小 | ${{ steps.build.outputs.wheel_size || 'N/A' }} |"; \
+            echo ""; \
+            echo "> 📦 产物已上传至 artifact: \`pytorch-wheel-arm-${{ matrix.python }}-${{ github.run_number }}\`"; \
+          else \
+            echo ""; \
+            echo "> 🔍 查看 build-log artifact 获取详细错误信息"; \
+          fi )
+          EOF
+
+  build-torch-npu-x86:
+    name: Build torch_npu (x86_64, Python ${{ matrix.python }})
+    needs: build-x86
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'x86' || github.event.inputs.platform == ''
+    runs-on: ubuntu-22.04
+    container:
+      image: ghcr.io/pytorch/test-infra:cpu-x86_64-latest
+      options: --user root
+    strategy:
+      fail-fast: false
+      matrix:
+        python: [cp310, cp311, cp312, cp313]
+    env:
+      PYTHON_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/python
+      PIP_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/pip
+      PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin:/opt/rh/gcc-toolset-13/root/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      LD_LIBRARY_PATH: /opt/rh/gcc-toolset-13/root/usr/lib64:/opt/rh/gcc-toolset-13/root/usr/lib
+
+    steps:
+      - name: Free disk space
+        run: |
+          echo "=== Disk space before cleanup ==="
+          df -h
+          rm -rf ~/.cache/pip/* 2>/dev/null || true
+          rm -rf ~/.npm 2>/dev/null || true
+          rm -rf ~/go 2>/dev/null || true
+          echo "=== Disk space after cleanup ==="
+          df -h
+
+      - name: Download PyTorch wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pytorch-wheel-x86-${{ matrix.python }}-${{ github.run_number }}
+          path: pytorch-wheel
+        continue-on-error: true
+
+      - name: Install PyTorch wheel
+        id: install_pytorch
+        run: |
+          if [ -d "pytorch-wheel" ] && [ "$(ls -A pytorch-wheel/*.whl 2>/dev/null)" ]; then
+            WHL=$(ls pytorch-wheel/*.whl | head -1)
+            pip install "$WHL"
+            TORCH_VER=$(python -c "import torch; print(torch.__version__)")
+            echo "version=${TORCH_VER}" >> $GITHUB_OUTPUT
+            echo "wheel=${WHL}" >> $GITHUB_OUTPUT
+            echo "PyTorch installed: ${TORCH_VER}"
+          else
+            echo "No PyTorch wheel found, job may have failed"
+            echo "version=N/A" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Clone Ascend/pytorch
+        id: clone
+        run: |
+          git clone --depth=1 --recurse-submodules \
+            https://gitcode.com/Ascend/pytorch.git ascend_pytorch
+          cd ascend_pytorch
+          COMMIT=$(git rev-parse HEAD)
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          COMMIT_DATE=$(git log -1 --format='%ci')
+          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+          echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
+          echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
+          echo "Ascend/pytorch commit: ${COMMIT_SHORT} (${COMMIT_DATE})"
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-torch-npu-x86-${{ matrix.python }}-${{ steps.clone.outputs.commit }}
+          restore-keys: |
+            ccache-torch-npu-x86-${{ matrix.python }}-
+
+      - name: Install build dependencies
+        run: |
+          cd ascend_pytorch
+          pip install pyyaml setuptools auditwheel
+
+      - name: Build torch_npu wheel
+        id: build
+        run: |
+          cd ascend_pytorch
+
+          # 记录构建开始时间
+          BUILD_START=$(date +%s)
+          echo "build_start=${BUILD_START}" >> $GITHUB_OUTPUT
+
+          # 配置 ccache
+          mkdir -p ~/.ccache
+          ccache -M 5G
+          ccache -z || true
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          export CCACHE_BASEDIR="${PWD}"
+          export CCACHE_DIR="${HOME}/.ccache"
+          export CCACHE_COMPRESS=1
+          export CCACHE_MAXSIZE=5G
+
+          # 构建配置
+          export MAX_JOBS=2
+          export DISABLE_INSTALL_TORCHAIR=FALSE
+          export BUILD_WITHOUT_SHA=1
+
+          # 执行构建
+          python setup.py build bdist_wheel 2>&1 | tee /tmp/torch_npu_build.log
+          BUILD_STATUS=${PIPESTATUS[0]}
+
+          # 记录构建结束时间
+          BUILD_END=$(date +%s)
+          BUILD_DURATION=$((BUILD_END - BUILD_START))
+          echo "build_end=${BUILD_END}" >> $GITHUB_OUTPUT
+          echo "build_duration=${BUILD_DURATION}" >> $GITHUB_OUTPUT
+
+          # 获取 ccache 统计
+          CCACHE_OUTPUT=$(ccache -s 2>/dev/null || echo "")
+          CACHE_HITS=$(echo "$CCACHE_OUTPUT" | grep -E "cache hit" | head -1 | awk '{print $3}' || echo "0")
+          CACHE_MISSES=$(echo "$CCACHE_OUTPUT" | grep -E "cache miss" | head -1 | awk '{print $3}' || echo "0")
+
+          if [ "$CACHE_HITS" != "0" ] || [ "$CACHE_MISSES" != "0" ]; then
+            TOTAL=$((CACHE_HITS + CACHE_MISSES))
+            HIT_RATE=$(awk "BEGIN {printf \"%.1f\", ($CACHE_HITS / $TOTAL) * 100}")
+          else
+            HIT_RATE="0.0"
+          fi
+
+          echo "cache_hits=${CACHE_HITS}" >> $GITHUB_OUTPUT
+          echo "cache_misses=${CACHE_MISSES}" >> $GITHUB_OUTPUT
+          echo "cache_hit_rate=${HIT_RATE}" >> $GITHUB_OUTPUT
+
+          ccache -s || true
+
+          echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
+          if [ ${BUILD_STATUS} -eq 0 ]; then
+            WHL=$(ls dist/*.whl 2>/dev/null | head -1)
+            WHL_SIZE=$(ls -lh "$WHL" 2>/dev/null | awk '{print $5}' || echo "N/A")
+            echo "wheel=${WHL}" >> $GITHUB_OUTPUT
+            echo "wheel_size=${WHL_SIZE}" >> $GITHUB_OUTPUT
+            echo "Build succeeded: ${WHL} (${WHL_SIZE})"
+          fi
+          exit ${BUILD_STATUS}
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: torch-npu-build-log-x86-${{ matrix.python }}-${{ github.run_number }}
+          path: /tmp/torch_npu_build.log
+          if-no-files-found: warn
+
+      - name: Upload torch_npu wheel
+        if: steps.build.outputs.status == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: torch-npu-wheel-x86-${{ matrix.python }}-${{ github.run_number }}
+          path: ascend_pytorch/dist/*.whl
+          if-no-files-found: warn
+
+      - name: Build summary
+        if: always()
+        run: |
+          BUILD_STATUS="${{ steps.build.outputs.status }}"
+          if [ "${BUILD_STATUS}" = "0" ]; then
+            STATUS_ICON="✅ SUCCESS"
+          else
+            STATUS_ICON="❌ FAILED"
+          fi
+
+          # 格式化编译耗时
+          BUILD_DURATION="${{ steps.build.outputs.build_duration }}"
+          if [ "${BUILD_DURATION}" != "" ] && [ "${BUILD_DURATION}" -gt 0 ]; then
+            HOURS=$((BUILD_DURATION / 3600))
+            MINUTES=$(((BUILD_DURATION % 3600) / 60))
+            SECONDS=$((BUILD_DURATION % 60))
+            DURATION_STR="${HOURS}h ${MINUTES}m ${SECONDS}s"
+          else
+            DURATION_STR="N/A"
+          fi
+
+          HIT_RATE="${{ steps.build.outputs.cache_hit_rate }}"
+          if [ "${HIT_RATE}" != "N/A" ] && [ "${HIT_RATE}" != "" ]; then
+            HIT_RATE_STR="${HIT_RATE}%"
+          else
+            HIT_RATE_STR="N/A"
+          fi
+
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## torch_npu Build (x86_64)
+
+          ### 编译信息
+          | 项目 | 详情 |
+          |------|------|
+          | Python 版本 | \`${{ matrix.python }}\` |
+          | PyTorch 版本 | \`${{ steps.install_pytorch.outputs.version }}\` |
+          | Ascend/pytorch Commit | [\`${{ steps.clone.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone.outputs.commit }}) |
+          | Commit 时间 | ${{ steps.clone.outputs.commit_date }} |
+          | 编译耗时 | ${DURATION_STR} |
+          | 构建结果 | ${STATUS_ICON} |
+
+          ### 缓存统计
+          | 项目 | 详情 |
+          |------|------|
+          | 缓存命中率 | ${HIT_RATE_STR} |
+          | Cache Hits | ${{ steps.build.outputs.cache_hits || 'N/A' }} |
+          | Cache Misses | ${{ steps.build.outputs.cache_misses || 'N/A' }} |
+
+          $( if [ "${BUILD_STATUS}" = "0" ]; then \
+            echo "### 构建产物"; \
+            echo "| 项目 | 详情 |"; \
+            echo "|------|------|"; \
+            echo "| Wheel 文件 | \`${{ steps.build.outputs.wheel }}\` |"; \
+            echo "| 文件大小 | ${{ steps.build.outputs.wheel_size || 'N/A' }} |"; \
+            echo ""; \
+            echo "> 📦 产物已上传至 artifact: \`torch-npu-wheel-x86-${{ matrix.python }}-${{ github.run_number }}\`"; \
+          else \
+            echo ""; \
+            echo "> 🔍 查看 torch-npu-build-log artifact 获取详细错误信息"; \
+          fi )
+          EOF
+
+  build-torch-npu-arm:
+    name: Build torch_npu (aarch64, Python ${{ matrix.python }})
+    needs: build-arm
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'arm' || github.event.inputs.platform == ''
+    runs-on: ubuntu-22.04-arm
+    container:
+      image: ghcr.io/pytorch/test-infra:cpu-aarch64-latest
+      options: --user root
+    strategy:
+      fail-fast: false
+      matrix:
+        python: [cp310, cp311, cp312, cp313]
+    env:
+      PYTHON_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/python
+      PIP_PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin/pip
+      PATH: /opt/python/${{ matrix.python }}-${{ matrix.python }}/bin:/opt/rh/gcc-toolset-13/root/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      LD_LIBRARY_PATH: /opt/rh/gcc-toolset-13/root/usr/lib64:/opt/rh/gcc-toolset-13/root/usr/lib:/opt/OpenBLAS/lib
+      AUDITWHEEL_PLAT: skip
+
+    steps:
+      - name: Free disk space
+        run: |
+          echo "=== Disk space before cleanup ==="
+          df -h
+          rm -rf ~/.cache/pip/* 2>/dev/null || true
+          rm -rf ~/.npm 2>/dev/null || true
+          rm -rf ~/go 2>/dev/null || true
+          echo "=== Disk space after cleanup ==="
+          df -h
+
+      - name: Download PyTorch wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pytorch-wheel-arm-${{ matrix.python }}-${{ github.run_number }}
+          path: pytorch-wheel
+        continue-on-error: true
+
+      - name: Install PyTorch wheel
+        id: install_pytorch
+        run: |
+          if [ -d "pytorch-wheel" ] && [ "$(ls -A pytorch-wheel/*.whl 2>/dev/null)" ]; then
+            WHL=$(ls pytorch-wheel/*.whl | head -1)
+            pip install "$WHL"
+            TORCH_VER=$(python -c "import torch; print(torch.__version__)")
+            echo "version=${TORCH_VER}" >> $GITHUB_OUTPUT
+            echo "wheel=${WHL}" >> $GITHUB_OUTPUT
+            echo "PyTorch installed: ${TORCH_VER}"
+          else
+            echo "No PyTorch wheel found, job may have failed"
+            echo "version=N/A" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Clone Ascend/pytorch
+        id: clone
+        run: |
+          git clone --depth=1 --recurse-submodules \
+            https://gitcode.com/Ascend/pytorch.git ascend_pytorch
+          cd ascend_pytorch
+          COMMIT=$(git rev-parse HEAD)
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          COMMIT_DATE=$(git log -1 --format='%ci')
+          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+          echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
+          echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
+          echo "Ascend/pytorch commit: ${COMMIT_SHORT} (${COMMIT_DATE})"
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-torch-npu-arm-${{ matrix.python }}-${{ steps.clone.outputs.commit }}
+          restore-keys: |
+            ccache-torch-npu-arm-${{ matrix.python }}-
+
+      - name: Install build dependencies
+        run: |
+          cd ascend_pytorch
+          pip install pyyaml setuptools
+
+      - name: Build torch_npu wheel
+        id: build
+        run: |
+          cd ascend_pytorch
+
+          # 记录构建开始时间
+          BUILD_START=$(date +%s)
+          echo "build_start=${BUILD_START}" >> $GITHUB_OUTPUT
+
+          # 配置 ccache
+          mkdir -p ~/.ccache
+          ccache -M 10G
+          ccache -z || true
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          export CCACHE_BASEDIR="${PWD}"
+          export CCACHE_DIR="${HOME}/.ccache"
+          export CCACHE_COMPRESS=1
+          export CCACHE_MAXSIZE=10G
+
+          # 构建配置
+          export MAX_JOBS=2
+          export DISABLE_INSTALL_TORCHAIR=FALSE
+          export BUILD_WITHOUT_SHA=1
+          export AUDITWHEEL_PLAT=skip
+
+          # 执行构建
+          python setup.py build bdist_wheel 2>&1 | tee /tmp/torch_npu_build.log
+          BUILD_STATUS=${PIPESTATUS[0]}
+
+          # 记录构建结束时间
+          BUILD_END=$(date +%s)
+          BUILD_DURATION=$((BUILD_END - BUILD_START))
+          echo "build_end=${BUILD_END}" >> $GITHUB_OUTPUT
+          echo "build_duration=${BUILD_DURATION}" >> $GITHUB_OUTPUT
+
+          # 获取 ccache 统计
+          CCACHE_OUTPUT=$(ccache -s 2>/dev/null || echo "")
+          CACHE_HITS=$(echo "$CCACHE_OUTPUT" | grep -E "cache hit" | head -1 | awk '{print $3}' || echo "0")
+          CACHE_MISSES=$(echo "$CCACHE_OUTPUT" | grep -E "cache miss" | head -1 | awk '{print $3}' || echo "0")
+
+          if [ "$CACHE_HITS" != "0" ] || [ "$CACHE_MISSES" != "0" ]; then
+            TOTAL=$((CACHE_HITS + CACHE_MISSES))
+            HIT_RATE=$(awk "BEGIN {printf \"%.1f\", ($CACHE_HITS / $TOTAL) * 100}")
+          else
+            HIT_RATE="0.0"
+          fi
+
+          echo "cache_hits=${CACHE_HITS}" >> $GITHUB_OUTPUT
+          echo "cache_misses=${CACHE_MISSES}" >> $GITHUB_OUTPUT
+          echo "cache_hit_rate=${HIT_RATE}" >> $GITHUB_OUTPUT
+
+          ccache -s || true
+
+          echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
+          if [ ${BUILD_STATUS} -eq 0 ]; then
+            WHL=$(ls dist/*.whl 2>/dev/null | head -1)
+            WHL_SIZE=$(ls -lh "$WHL" 2>/dev/null | awk '{print $5}' || echo "N/A")
+            echo "wheel=${WHL}" >> $GITHUB_OUTPUT
+            echo "wheel_size=${WHL_SIZE}" >> $GITHUB_OUTPUT
+            echo "Build succeeded: ${WHL} (${WHL_SIZE})"
+          fi
+          exit ${BUILD_STATUS}
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: torch-npu-build-log-arm-${{ matrix.python }}-${{ github.run_number }}
+          path: /tmp/torch_npu_build.log
+          if-no-files-found: warn
+
+      - name: Upload torch_npu wheel
+        if: steps.build.outputs.status == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: torch-npu-wheel-arm-${{ matrix.python }}-${{ github.run_number }}
+          path: ascend_pytorch/dist/*.whl
+          if-no-files-found: warn
+
+      - name: Build summary
+        if: always()
+        run: |
+          BUILD_STATUS="${{ steps.build.outputs.status }}"
+          if [ "${BUILD_STATUS}" = "0" ]; then
+            STATUS_ICON="✅ SUCCESS"
+          else
+            STATUS_ICON="❌ FAILED"
+          fi
+
+          # 格式化编译耗时
+          BUILD_DURATION="${{ steps.build.outputs.build_duration }}"
+          if [ "${BUILD_DURATION}" != "" ] && [ "${BUILD_DURATION}" -gt 0 ]; then
+            HOURS=$((BUILD_DURATION / 3600))
+            MINUTES=$(((BUILD_DURATION % 3600) / 60))
+            SECONDS=$((BUILD_DURATION % 60))
+            DURATION_STR="${HOURS}h ${MINUTES}m ${SECONDS}s"
+          else
+            DURATION_STR="N/A"
+          fi
+
+          HIT_RATE="${{ steps.build.outputs.cache_hit_rate }}"
+          if [ "${HIT_RATE}" != "N/A" ] && [ "${HIT_RATE}" != "" ]; then
+            HIT_RATE_STR="${HIT_RATE}%"
+          else
+            HIT_RATE_STR="N/A"
+          fi
+
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## torch_npu Build (aarch64)
+
+          ### 编译信息
+          | 项目 | 详情 |
+          |------|------|
+          | Python 版本 | \`${{ matrix.python }}\` |
+          | PyTorch 版本 | \`${{ steps.install_pytorch.outputs.version }}\` |
+          | Ascend/pytorch Commit | [\`${{ steps.clone.outputs.commit_short }}\`](https://gitcode.com/Ascend/pytorch/commit/${{ steps.clone.outputs.commit }}) |
+          | Commit 时间 | ${{ steps.clone.outputs.commit_date }} |
+          | 编译耗时 | ${DURATION_STR} |
+          | 构建结果 | ${STATUS_ICON} |
+
+          ### 缓存统计
+          | 项目 | 详情 |
+          |------|------|
+          | 缓存命中率 | ${HIT_RATE_STR} |
+          | Cache Hits | ${{ steps.build.outputs.cache_hits || 'N/A' }} |
+          | Cache Misses | ${{ steps.build.outputs.cache_misses || 'N/A' }} |
+
+          $( if [ "${BUILD_STATUS}" = "0" ]; then \
+            echo "### 构建产物"; \
+            echo "| 项目 | 详情 |"; \
+            echo "|------|------|"; \
+            echo "| Wheel 文件 | \`${{ steps.build.outputs.wheel }}\` |"; \
+            echo "| 文件大小 | ${{ steps.build.outputs.wheel_size || 'N/A' }} |"; \
+            echo ""; \
+            echo "> 📦 产物已上传至 artifact: \`torch-npu-wheel-arm-${{ matrix.python }}-${{ github.run_number }}\`"; \
+          else \
+            echo ""; \
+            echo "> 🔍 查看 torch-npu-build-log artifact 获取详细错误信息"; \
+          fi )
           EOF
 
   build-summary:
     name: Build Summary
-    needs: [build-x86, build-arm]
+    needs: [build-x86, build-arm, build-torch-npu-x86, build-torch-npu-arm]
     if: always()
     runs-on: ubuntu-22.04
 
@@ -405,10 +1059,12 @@ jobs:
         run: |
           PLATFORM="${{ github.event.inputs.platform || 'all' }}"
           cat >> $GITHUB_STEP_SUMMARY << EOF
-          ## PyTorch Wheel Build Summary
+          ## 构建总览
 
           **构建平台**: ${PLATFORM}
           **PyTorch Ref**: \`${{ github.event.inputs.pytorch_ref || 'main' }}\`
+
+          ### PyTorch Wheel 构建
 
           | 平台 | Python 版本 | Job 名称 |
           |------|-------------|----------|
@@ -423,5 +1079,25 @@ jobs:
             done; \
           fi )
 
-          请查看各 job 的详细结果和产物（wheel 文件、构建日志）。
+          ### torch_npu Wheel 构建
+
+          | 平台 | Python 版本 | Job 名称 |
+          |------|-------------|----------|
+          $( if [ "${PLATFORM}" = "all" ] || [ "${PLATFORM}" = "x86" ] || [ "${PLATFORM}" = "" ]; then \
+            for py in cp310 cp311 cp312 cp313; do \
+              echo "| x86_64 | ${py} | build-torch-npu-x86 (Python ${py}) |"; \
+            done; \
+          fi )
+          $( if [ "${PLATFORM}" = "all" ] || [ "${PLATFORM}" = "arm" ] || [ "${PLATFORM}" = "" ]; then \
+            for py in cp310 cp311 cp312 cp313; do \
+              echo "| aarch64 | ${py} | build-torch-npu-arm (Python ${py}) |"; \
+            done; \
+          fi )
+
+          ---
+
+          请查看各 job 的详细结果和产物：
+          - **PyTorch wheel**: \`pytorch-wheel-{x86,arm}-{python}-{run_number}\`
+          - **torch_npu wheel**: \`torch-npu-wheel-{x86,arm}-{python}-{run_number}\`
+          - **构建日志**: \`build-log-{x86,arm}-{python}-{run_number}\` / \`torch-npu-build-log-{x86,arm}-{python}-{run_number}\`
           EOF
