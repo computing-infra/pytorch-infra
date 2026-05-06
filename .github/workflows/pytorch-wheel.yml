@@ -690,6 +690,8 @@ jobs:
         run: |
           cd ascend_pytorch
           pip install pyyaml setuptools auditwheel
+          # 安装 ccache（容器中未预装）
+          apt-get update && apt-get install -y ccache
 
       - name: Build torch_npu wheel
         id: build
@@ -911,6 +913,8 @@ jobs:
         run: |
           cd ascend_pytorch
           pip install pyyaml setuptools
+          # 安装 ccache（容器中未预装）
+          apt-get update && apt-get install -y ccache
 
       - name: Build torch_npu wheel
         id: build
