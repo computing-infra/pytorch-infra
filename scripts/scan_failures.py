@@ -141,30 +141,22 @@ def main():
         failed_forward = find_failed_forward_jobs(jobs)
         failed_names = [j["name"] for j in failed_forward]
 
-        if build_job and build_job.get("conclusion") == "success":
-            print(f"  {run_id} ({run_name}): build 成功，无需分析", file=sys.stderr)
-            if args.json:
-                print(json.dumps({
-                    "action": "skip",
-                    "reason": "latest_build_succeeded",
-                    "run": run,
-                }, ensure_ascii=False, indent=2))
-            return
+        if not failed_forward:
+            build_status = build_job.get("conclusion") if build_job else "skipped"
+            print(f"  {run_id} ({run_name}): 无失败 forward job（build={build_status}），继续查找", file=sys.stderr)
+            continue
 
-        if failed_forward:
-            print(f"  {run_id} ({run_name}): 失败 jobs={failed_names}", file=sys.stderr)
-            print(f"发现失败: {run_id} ({run_name})", file=sys.stderr)
-            run["failed_jobs"] = failed_names
-            if args.json:
-                print(json.dumps({
-                    "action": "analyze",
-                    "run": run,
-                }, ensure_ascii=False, indent=2))
-            else:
-                print(run_id)
-            return
-
-        print(f"  {run_id} ({run_name}): 无失败 forward job，继续查找", file=sys.stderr)
+        print(f"  {run_id} ({run_name}): 失败 jobs={failed_names}", file=sys.stderr)
+        print(f"发现失败: {run_id} ({run_name})", file=sys.stderr)
+        run["failed_jobs"] = failed_names
+        if args.json:
+            print(json.dumps({
+                "action": "analyze",
+                "run": run,
+            }, ensure_ascii=False, indent=2))
+        else:
+            print(run_id)
+        return
 
     print("未找到有失败的 forward 运行", file=sys.stderr)
     if args.json:
