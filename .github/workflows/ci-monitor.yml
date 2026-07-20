@@ -1,0 +1,190 @@
+name: CI Monitor
+
+on:
+  schedule:
+    - cron: '0 1,7,13 * * *'
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: '指定分析的 Run ID（留空则自动扫描最新失败）'
+        required: false
+        default: ''
+      hours:
+        description: '扫描最近 N 小时（默认 12）'
+        required: false
+        default: '12'
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_PAT: ${{ secrets.GH_PAT }}
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure GH PAT
+        run: |
+          echo "GH_TOKEN=${{ secrets.GH_PAT }}" >> $GITHUB_ENV
+          gh auth status 2>&1 || echo "PAT 未配置，将使用默认 GITHUB_TOKEN（可能受限）"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install gh
+        run: |
+          if ! command -v gh &>/dev/null; then
+            (type -p wget >/dev/null || sudo apt-get install -y wget) \
+              && sudo mkdir -p -m 755 /etc/apt/keyrings \
+              && wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+                | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+              && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+              && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+                | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+              && sudo apt-get update && sudo apt-get install -y gh
+          fi
+          gh --version
+
+      - name: Scan failures
+        id: scan
+        run: |
+          RUN_ID_INPUT="${{ github.event.inputs.run_id || '' }}"
+          HOURS="${{ github.event.inputs.hours || '12' }}"
+
+          if [[ -n "$RUN_ID_INPUT" ]]; then
+            echo "run_id=$RUN_ID_INPUT" >> $GITHUB_OUTPUT
+            echo "手动指定分析 Run ID: $RUN_ID_INPUT"
+          else
+            SCAN_OUTPUT=$(python3 scripts/scan_failures.py --hours "$HOURS" --reports-dir reports --max 1 --json 2>/tmp/scan_stderr)
+            cat /tmp/scan_stderr >&2
+            RUN_ID=$(echo "$SCAN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['failures'][0]['id'] if d.get('failures') else '')" 2>/dev/null || echo "")
+            if [[ -z "$RUN_ID" ]]; then
+              echo "无新的失败运行需要分析"
+              echo "skip=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+            RUN_NAME=$(echo "$SCAN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['failures'][0].get('run_name',''))" 2>/dev/null || echo "")
+            echo "run_name=$RUN_NAME" >> $GITHUB_OUTPUT
+            echo "发现失败运行: $RUN_ID ($RUN_NAME)"
+          fi
+
+      - name: Skip if no failure
+        if: steps.scan.outputs.skip == 'true'
+        run: echo "跳过：无新的失败运行"
+
+      - name: Setup environment
+        if: steps.scan.outputs.skip != 'true'
+        run: bash scripts/setup_env.sh skills
+        env:
+          BAILIAN_API_KEY: ${{ secrets.BAILIAN_API_KEY }}
+
+      - name: Extract failure logs
+        if: steps.scan.outputs.skip != 'true'
+        run: |
+          export PATH="$HOME/.opencode/bin:$PATH"
+          RUN_ID="${{ steps.scan.outputs.run_id }}"
+          LOG_DIR="/tmp/ci-analysis"
+          mkdir -p "$LOG_DIR"
+          python3 skills/ascend-ci-build-debugger/scripts/extract_failure_logs.py "$RUN_ID" --output "$LOG_DIR" --repo Ascend/pytorch
+          echo "=== failures.json 大小 ==="
+          ls -la "$LOG_DIR/failures.json"
+
+      - name: Clone source code
+        if: steps.scan.outputs.skip != 'true'
+        run: |
+          bash scripts/clone_sources.sh /tmp/sources
+          df -h /tmp
+
+      - name: Run AI analysis
+        if: steps.scan.outputs.skip != 'true'
+        id: analysis
+        run: |
+          export PATH="$HOME/.opencode/bin:$PATH"
+          RUN_ID="${{ steps.scan.outputs.run_id }}"
+          LOG_DIR="/tmp/ci-analysis"
+          PYTORCH_SRC="/tmp/sources/pytorch"
+          TORCH_NPU_SRC="/tmp/sources/torch_npu"
+
+          export CI_RUN_ID="$RUN_ID"
+          export PYTORCH_SRC
+          export TORCH_NPU_SRC
+          export LOG_DIR
+
+          echo "=== 启动 opencode AI 分析 ==="
+          PROMPT="请使用 ascend-ci-build-debugger skill 分析 Ascend/pytorch CI build 阶段失败。
+          环境变量已设置：CI_RUN_ID=${RUN_ID}, PYTORCH_SRC=${PYTORCH_SRC}, TORCH_NPU_SRC=${TORCH_NPU_SRC}, LOG_DIR=${LOG_DIR}
+          请按 skill 工作流程执行：
+          1. 运行 python3 skills/ascend-ci-build-debugger/scripts/extract_failure_logs.py \$CI_RUN_ID --output \$LOG_DIR 提取失败日志
+          2. 阅读 \$LOG_DIR/failures.json 中的失败信息
+          3. 用 grep/glob/read 工具在 \$PYTORCH_SRC 和 \$TORCH_NPU_SRC 源码中交叉引用定位根因
+          4. 将分析报告写入 \$LOG_DIR/report.md（按 skill 中定义的 frontmatter + markdown 格式）"
+
+          opencode run \
+            --model bailian/glm-5.2 \
+            --dir "$GITHUB_WORKSPACE" \
+            "$PROMPT" 2>&1 | tee /tmp/opencode_output.log
+
+          if [[ -f "$LOG_DIR/report.md" ]]; then
+            echo "report_generated=true" >> $GITHUB_OUTPUT
+            echo "=== 报告已生成 ==="
+            head -30 "$LOG_DIR/report.md"
+          else
+            echo "report_generated=false" >> $GITHUB_OUTPUT
+            echo "错误：报告未生成"
+            echo "=== opencode 输出末尾 ==="
+            tail -50 /tmp/opencode_output.log
+          fi
+        timeout-minutes: 15
+
+      - name: Save report
+        if: steps.analysis.outputs.report_generated == 'true'
+        run: |
+          RUN_ID="${{ steps.scan.outputs.run_id }}"
+          LOG_DIR="/tmp/ci-analysis"
+          mkdir -p reports
+          cp "$LOG_DIR/report.md" "reports/${RUN_ID}.md"
+          echo "报告已保存: reports/${RUN_ID}.md"
+
+      - name: Commit report
+        if: steps.analysis.outputs.report_generated == 'true'
+        run: |
+          RUN_ID="${{ steps.scan.outputs.run_id }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "reports/${RUN_ID}.md"
+          git commit -m "report: add analysis for run ${RUN_ID}" || echo "无变更需提交"
+          git pull --rebase origin main 2>/dev/null || true
+          git push origin main
+
+      - name: Notify Feishu
+        if: steps.analysis.outputs.report_generated == 'true'
+        run: |
+          RUN_ID="${{ steps.scan.outputs.run_id }}"
+          python3 scripts/notify_feishu.py \
+            --report "reports/${RUN_ID}.md" \
+            --repo-url "${{ github.server_url }}/${{ github.repository }}"
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## CI Monitor Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.scan.outputs.skip }}" == "true" ]]; then
+            echo "无新的失败运行需要分析" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.analysis.outputs.report_generated }}" == "true" ]]; then
+            echo "✅ 已分析 Run ${{ steps.scan.outputs.run_id }} 并生成报告" >> $GITHUB_STEP_SUMMARY
+            echo "报告: reports/${{ steps.scan.outputs.run_id }}.md" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Run ${{ steps.scan.outputs.run_id }} 分析未完成" >> $GITHUB_STEP_SUMMARY
+          fi

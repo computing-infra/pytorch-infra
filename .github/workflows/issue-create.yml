@@ -1,0 +1,147 @@
+name: Issue Create
+
+on:
+  workflow_dispatch:
+    inputs:
+      report_file:
+        description: '指定报告文件名（如 29713196943.md，留空则取最新报告）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  create-issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Find latest report
+        id: find
+        run: |
+          REPORT_FILE="${{ github.event.inputs.report_file || '' }}"
+          if [[ -n "$REPORT_FILE" ]]; then
+            RESULT=$(python3 scripts/find_latest_report.py --reports-dir reports --report-file "$REPORT_FILE" --json 2>/tmp/find_stderr)
+          else
+            RESULT=$(python3 scripts/find_latest_report.py --reports-dir reports --json 2>/tmp/find_stderr)
+          fi
+          cat /tmp/find_stderr >&2
+
+          HAS_REPORT=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('has_report', False))" 2>/dev/null || echo "False")
+          if [[ "$HAS_REPORT" != "True" ]]; then
+            echo "无报告可用，退出"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          REPORT_PATH=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['report_path'])")
+          RUN_ID=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['run_id'])")
+          RUN_NAME=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['run_name'])")
+          PR_NUMBER=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('pr_number',''))")
+
+          echo "report_path=$REPORT_PATH" >> $GITHUB_OUTPUT
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "run_name=$RUN_NAME" >> $GITHUB_OUTPUT
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "找到报告: $REPORT_PATH"
+          echo "Run: $RUN_NAME (PR: $PR_NUMBER)"
+
+      - name: Skip if no report
+        if: steps.find.outputs.skip == 'true'
+        run: echo "跳过：无报告"
+
+      - name: Setup environment
+        if: steps.find.outputs.skip != 'true'
+        run: bash scripts/setup_env.sh skills
+        env:
+          BAILIAN_API_KEY: ${{ secrets.BAILIAN_API_KEY }}
+          GC_TOKEN: ${{ secrets.GC_TOKEN }}
+
+      - name: Check for duplicate issue
+        if: steps.find.outputs.skip != 'true'
+        id: dedup
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          PR_NUMBER="${{ steps.find.outputs.pr_number }}"
+          RUN_NAME="${{ steps.find.outputs.run_name }}"
+
+          if [[ -z "$PR_NUMBER" ]]; then
+            SEARCH_TERM="$RUN_NAME"
+          else
+            SEARCH_TERM="PR #${PR_NUMBER}"
+          fi
+
+          echo "搜索关键词: $SEARCH_TERM"
+
+          EXISTING=$(gc issue list -R Ascend/pytorch --state all --search "$SEARCH_TERM" --json 2>/dev/null || echo "[]")
+          ISSUE_COUNT=$(echo "$EXISTING" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else 0)" 2>/dev/null || echo "0")
+
+          if [[ "$ISSUE_COUNT" -gt 0 ]]; then
+            echo "已有类似 issue ($ISSUE_COUNT 个)，跳过创建"
+            echo "$EXISTING" | python3 -m json.tool 2>/dev/null | head -20
+            echo "duplicate=true" >> $GITHUB_OUTPUT
+          else
+            echo "无类似 issue，可创建"
+            echo "duplicate=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create issue via opencode
+        if: steps.find.outputs.skip != 'true' && steps.dedup.outputs.duplicate != 'true'
+        id: create
+        run: |
+          export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"
+          REPORT_PATH="${{ steps.find.outputs.report_path }}"
+          RUN_ID="${{ steps.find.outputs.run_id }}"
+          RUN_NAME="${{ steps.find.outputs.run_name }}"
+
+          echo "=== 启动 opencode 创建 issue ==="
+          PROMPT="请使用 gitcode-issue-create skill 在 Ascend/pytorch 仓库创建 issue。
+          已有信息：AI 分析报告路径=${REPORT_PATH}, Run ID=${RUN_ID}, Run Name=${RUN_NAME}
+          请按 skill 工作流程执行：
+          1. 阅读 ${REPORT_PATH} 报告内容
+          2. 根据报告内容草拟 issue（Bug 类型），title 格式: ci: pytorch_ci_trigger build 失败 - ${RUN_NAME}
+          3. issue body 应包含：失败运行链接、失败 job、AI 根因分析、修复建议
+          4. 用 gc issue list -R Ascend/pytorch --state all --search \"${RUN_NAME}\" 检查是否已有类似 issue（双重检查）
+          5. 如无重复，用 gc issue create -R Ascend/pytorch --title \"...\" --body-file issue_body.md --label bug --json 创建 issue
+          6. 输出创建的 issue URL"
+
+          opencode run \
+            --model bailian/glm-5.2 \
+            --dir "$GITHUB_WORKSPACE" \
+            "$PROMPT" 2>&1 | tee /tmp/opencode_issue.log
+
+          ISSUE_URL=$(grep -oE 'https://gitcode\.com/Ascend/pytorch/issues/[0-9]+' /tmp/opencode_issue.log | head -1 || echo "")
+          if [[ -n "$ISSUE_URL" ]]; then
+            echo "issue_url=$ISSUE_URL" >> $GITHUB_OUTPUT
+            echo "Issue 创建成功: $ISSUE_URL"
+          else
+            echo "警告：未从输出中提取到 issue URL"
+            echo "=== opencode 输出末尾 ==="
+            tail -30 /tmp/opencode_issue.log
+          fi
+        timeout-minutes: 10
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Issue Create Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.find.outputs.skip }}" == "true" ]]; then
+            echo "无报告可用" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.dedup.outputs.duplicate }}" == "true" ]]; then
+            echo "⏭️ 已有类似 issue，跳过创建" >> $GITHUB_STEP_SUMMARY
+          elif [[ -n "${{ steps.create.outputs.issue_url }}" ]]; then
+            echo "✅ Issue 创建成功: ${{ steps.create.outputs.issue_url }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Issue 创建未完成" >> $GITHUB_STEP_SUMMARY
+          fi

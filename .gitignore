@@ -1,0 +1,24 @@
+# 临时文件
+.tmp/
+tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.python-version
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# opencode 本地配置（CI 中动态生成）
+.opencode/
+
+# 源码 clone 目录（CI 中临时下载）
+sources/
+
+# 日志
+*.log
