@@ -4,21 +4,19 @@ scan_failures.py - 扫描 Ascend/pytorch 的 pytorch_ci_trigger.yml 运行。
 
 查找最近实际执行了 `forward / build / pytorch_and_torch-npu_build` job 的运行：
 - 如果最新一次 build 成功 → 正常结束，无需分析
-- 如果最新一次 build 失败且尚未生成报告 → 返回该运行供 AI 分析
-- 如果最新一次 build 失败但已有报告 → 跳过（已分析过）
+- 如果最新一次 build 失败 → 返回该运行供分析（去重由 check_duplicate.py 负责）
 
 只有 PR closed 事件才可能触发 build（需 merged + target main），
 因此预过滤只检查 (closed) 运行以减少 API 调用。
 
 用法：
-    python3 scan_failures.py [--hours 72] [--reports-dir reports] [--json]
+    python3 scan_failures.py [--hours 72] [--json]
 """
 
 import json
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 REPO = "Ascend/pytorch"
 WORKFLOW_FILE = "pytorch_ci_trigger.yml"
@@ -96,28 +94,13 @@ def get_run_name(run_id: str) -> str:
     return f"Run {run_id}"
 
 
-def get_existing_reported_ids(reports_dir: Path) -> set[str]:
-    ids = set()
-    if not reports_dir.exists():
-        return ids
-    for f in reports_dir.glob("*.md"):
-        stem = f.stem
-        if stem.isdigit():
-            ids.add(stem)
-    return ids
-
-
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="扫描 pytorch_ci_trigger.yml build 执行结果")
     parser.add_argument("--hours", type=int, default=72, help="扫描最近 N 小时（默认 72）")
-    parser.add_argument("--reports-dir", type=str, default="reports", help="报告目录（默认 reports）")
     parser.add_argument("--json", action="store_true", help="输出 JSON 格式")
     args = parser.parse_args()
-
-    reports_dir = Path(args.reports_dir)
-    reported_ids = get_existing_reported_ids(reports_dir)
 
     workflow_id = get_workflow_id()
     if not workflow_id:
@@ -160,17 +143,7 @@ def main():
             return
 
         if build_conclusion == "failure":
-            if run_id in reported_ids:
-                print(f"最新 build 失败但已有报告，无需分析", file=sys.stderr)
-                if args.json:
-                    print(json.dumps({
-                        "action": "skip",
-                        "reason": "already_analyzed",
-                        "run": run,
-                    }, ensure_ascii=False, indent=2))
-                return
-
-            print(f"需要分析: {run_id} ({run_name})", file=sys.stderr)
+            print(f"发现 build 失败: {run_id} ({run_name})", file=sys.stderr)
             if args.json:
                 print(json.dumps({
                     "action": "analyze",

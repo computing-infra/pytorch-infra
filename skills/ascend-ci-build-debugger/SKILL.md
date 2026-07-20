@@ -69,6 +69,7 @@ run_id: <run-id>
 run_name: <run_name>
 run_url: https://github.com/Ascend/pytorch/actions/runs/<run-id>
 analyzed_at: <ISO 8601 时间>
+fingerprint: <失败指纹，由 check_duplicate.py 计算，从环境变量 FINGERPRINT 获取>
 failed_jobs:
   - <job 1 名称>
   - <job 2 名称>

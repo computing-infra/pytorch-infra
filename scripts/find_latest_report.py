@@ -26,6 +26,8 @@ def parse_frontmatter(content: str) -> dict:
             val = val.strip()
             if val.startswith("["):
                 continue
+            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1]
             fm[key.strip()] = val
     return fm
 
@@ -72,7 +74,10 @@ def main():
     content = report_path.read_text(encoding="utf-8")
     fm = parse_frontmatter(content)
 
-    run_id = fm.get("run_id", report_path.stem)
+    run_id = fm.get("run_id", "")
+    if not run_id:
+        m = re.match(r"^(\d+)-", report_path.stem)
+        run_id = m.group(1) if m else report_path.stem
     run_name = fm.get("run_name", f"Run {run_id}")
 
     pr_match = re.search(r"PR #(\d+)", run_name)

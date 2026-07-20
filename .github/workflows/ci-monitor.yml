@@ -63,7 +63,7 @@ jobs:
             echo "run_name=手动指定" >> $GITHUB_OUTPUT
             echo "手动指定分析 Run ID: $RUN_ID_INPUT"
           else
-            SCAN_OUTPUT=$(python3 scripts/scan_failures.py --hours "$HOURS" --reports-dir reports --json 2>/tmp/scan_stderr)
+            SCAN_OUTPUT=$(python3 scripts/scan_failures.py --hours "$HOURS" --json 2>/tmp/scan_stderr)
             cat /tmp/scan_stderr >&2
 
             ACTION=$(echo "$SCAN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('action','skip'))" 2>/dev/null || echo "skip")
@@ -96,44 +96,74 @@ jobs:
 
       - name: Extract failure logs
         if: steps.scan.outputs.action == 'analyze'
+        id: extract
         run: |
-          export PATH="$HOME/.opencode/bin:$PATH"
           RUN_ID="${{ steps.scan.outputs.run_id }}"
           LOG_DIR="/tmp/ci-analysis"
           mkdir -p "$LOG_DIR"
           python3 skills/ascend-ci-build-debugger/scripts/extract_failure_logs.py "$RUN_ID" --output "$LOG_DIR" --repo Ascend/pytorch
           echo "=== failures.json 大小 ==="
           ls -la "$LOG_DIR/failures.json"
+          echo "log_dir=$LOG_DIR" >> $GITHUB_OUTPUT
+
+      - name: Check duplicate by fingerprint
+        if: steps.scan.outputs.action == 'analyze'
+        id: dedup
+        run: |
+          LOG_DIR="${{ steps.extract.outputs.log_dir }}"
+          DEDUP_OUTPUT=$(python3 scripts/check_duplicate.py --failures "$LOG_DIR/failures.json" --reports-dir reports --json 2>/tmp/dedup_stderr)
+          cat /tmp/dedup_stderr >&2
+
+          DUPLICATE=$(echo "$DEDUP_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('duplicate', False))" 2>/dev/null || echo "False")
+          FINGERPRINT=$(echo "$DEDUP_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('fingerprint',''))" 2>/dev/null || echo "")
+          echo "fingerprint=$FINGERPRINT" >> $GITHUB_OUTPUT
+
+          if [[ "$DUPLICATE" == "True" ]]; then
+            EXISTING=$(echo "$DEDUP_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('existing_report',''))" 2>/dev/null || echo "")
+            echo "duplicate=true" >> $GITHUB_OUTPUT
+            echo "existing_report=$EXISTING" >> $GITHUB_OUTPUT
+            echo "发现同根因报告: $EXISTING，跳过分析"
+          else
+            echo "duplicate=false" >> $GITHUB_OUTPUT
+            echo "无同根因报告，继续分析"
+          fi
+
+      - name: Skip duplicate
+        if: steps.dedup.outputs.duplicate == 'true'
+        run: |
+          echo "跳过：同根因报告已存在 ${{ steps.dedup.outputs.existing_report }}"
 
       - name: Clone source code
-        if: steps.scan.outputs.action == 'analyze'
+        if: steps.scan.outputs.action == 'analyze' && steps.dedup.outputs.duplicate != 'true'
         run: |
           bash scripts/clone_sources.sh /tmp/sources
           df -h /tmp
 
       - name: Run AI analysis
-        if: steps.scan.outputs.action == 'analyze'
+        if: steps.scan.outputs.action == 'analyze' && steps.dedup.outputs.duplicate != 'true'
         id: analysis
         run: |
           export PATH="$HOME/.opencode/bin:$PATH"
           RUN_ID="${{ steps.scan.outputs.run_id }}"
-          LOG_DIR="/tmp/ci-analysis"
+          LOG_DIR="${{ steps.extract.outputs.log_dir }}"
           PYTORCH_SRC="/tmp/sources/pytorch"
           TORCH_NPU_SRC="/tmp/sources/torch_npu"
+          FINGERPRINT="${{ steps.dedup.outputs.fingerprint }}"
 
           export CI_RUN_ID="$RUN_ID"
           export PYTORCH_SRC
           export TORCH_NPU_SRC
           export LOG_DIR
+          export FINGERPRINT
 
           echo "=== 启动 opencode AI 分析 ==="
           PROMPT="请使用 ascend-ci-build-debugger skill 分析 Ascend/pytorch CI build 阶段失败。
-          环境变量已设置：CI_RUN_ID=${RUN_ID}, PYTORCH_SRC=${PYTORCH_SRC}, TORCH_NPU_SRC=${TORCH_NPU_SRC}, LOG_DIR=${LOG_DIR}
+          环境变量已设置：CI_RUN_ID=${RUN_ID}, PYTORCH_SRC=${PYTORCH_SRC}, TORCH_NPU_SRC=${TORCH_NPU_SRC}, LOG_DIR=${LOG_DIR}, FINGERPRINT=${FINGERPRINT}
           请按 skill 工作流程执行：
-          1. 运行 python3 skills/ascend-ci-build-debugger/scripts/extract_failure_logs.py \$CI_RUN_ID --output \$LOG_DIR 提取失败日志
-          2. 阅读 \$LOG_DIR/failures.json 中的失败信息
-          3. 用 grep/glob/read 工具在 \$PYTORCH_SRC 和 \$TORCH_NPU_SRC 源码中交叉引用定位根因
-          4. 将分析报告写入 \$LOG_DIR/report.md（按 skill 中定义的 frontmatter + markdown 格式）"
+          1. 失败日志已提取至 \$LOG_DIR/failures.json，直接阅读即可
+          2. 用 grep/glob/read 工具在 \$PYTORCH_SRC 和 \$TORCH_NPU_SRC 源码中交叉引用定位根因
+          3. 将分析报告写入 \$LOG_DIR/report.md（按 skill 中定义的 frontmatter + markdown 格式）
+          注意：frontmatter 中的 fingerprint 字段值应设为 \$FINGERPRINT"
 
           opencode run \
             --model bailian/MiniMax-M3 \
@@ -154,30 +184,34 @@ jobs:
 
       - name: Save report
         if: steps.analysis.outputs.report_generated == 'true'
+        id: save
         run: |
           RUN_ID="${{ steps.scan.outputs.run_id }}"
-          LOG_DIR="/tmp/ci-analysis"
+          LOG_DIR="${{ steps.extract.outputs.log_dir }}"
+          TIMESTAMP=$(TZ='Asia/Shanghai' date '+%Y-%-m-%-d-%-H-%M')
+          REPORT_FILE="reports/${RUN_ID}-${TIMESTAMP}.md"
           mkdir -p reports
-          cp "$LOG_DIR/report.md" "reports/${RUN_ID}.md"
-          echo "报告已保存: reports/${RUN_ID}.md"
+          cp "$LOG_DIR/report.md" "$REPORT_FILE"
+          echo "report_file=$REPORT_FILE" >> $GITHUB_OUTPUT
+          echo "报告已保存: $REPORT_FILE"
 
       - name: Commit report
         if: steps.analysis.outputs.report_generated == 'true'
         run: |
-          RUN_ID="${{ steps.scan.outputs.run_id }}"
+          REPORT_FILE="${{ steps.save.outputs.report_file }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "reports/${RUN_ID}.md"
-          git commit -m "report: add analysis for run ${RUN_ID}" || echo "无变更需提交"
+          git add "$REPORT_FILE"
+          git commit -m "report: add analysis for $REPORT_FILE" || echo "无变更需提交"
           git pull --rebase origin main 2>/dev/null || true
           git push origin main
 
       - name: Notify Feishu
         if: steps.analysis.outputs.report_generated == 'true'
         run: |
-          RUN_ID="${{ steps.scan.outputs.run_id }}"
+          REPORT_FILE="${{ steps.save.outputs.report_file }}"
           python3 scripts/notify_feishu.py \
-            --report "reports/${RUN_ID}.md" \
+            --report "$REPORT_FILE" \
             --repo-url "${{ github.server_url }}/${{ github.repository }}"
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
@@ -189,9 +223,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           if [[ "${{ steps.scan.outputs.action }}" != "analyze" ]]; then
             echo "⏭️ 跳过分析: ${{ steps.scan.outputs.skip_reason }}" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.dedup.outputs.duplicate }}" == "true" ]]; then
+            echo "⏭️ 跳过：同根因报告已存在 ${{ steps.dedup.outputs.existing_report }}" >> $GITHUB_STEP_SUMMARY
+            echo "指纹: \`${{ steps.dedup.outputs.fingerprint }}\`" >> $GITHUB_STEP_SUMMARY
           elif [[ "${{ steps.analysis.outputs.report_generated }}" == "true" ]]; then
             echo "✅ 已分析 Run ${{ steps.scan.outputs.run_id }} 并生成报告" >> $GITHUB_STEP_SUMMARY
-            echo "报告: reports/${{ steps.scan.outputs.run_id }}.md" >> $GITHUB_STEP_SUMMARY
+            echo "报告: ${{ steps.save.outputs.report_file }}" >> $GITHUB_STEP_SUMMARY
+            echo "指纹: \`${{ steps.dedup.outputs.fingerprint }}\`" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Run ${{ steps.scan.outputs.run_id }} 分析未完成" >> $GITHUB_STEP_SUMMARY
           fi
