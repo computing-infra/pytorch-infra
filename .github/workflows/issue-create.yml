@@ -116,7 +116,7 @@ jobs:
           6. 输出创建的 issue URL"
 
           opencode run \
-            --model bailian/glm-5.2 \
+            --model bailian/MiniMax-M3 \
             --dir "$GITHUB_WORKSPACE" \
             "$PROMPT" 2>&1 | tee /tmp/opencode_issue.log
 

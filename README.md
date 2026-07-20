@@ -38,10 +38,11 @@ pytorch_ci_trigger.yml (Ascend/pytorch)
 
 | Secret | 用途 |
 |--------|------|
-| `GH_PAT` | 读取 Ascend/pytorch Actions 运行（PAT, `actions:read`） |
-| `BAILIAN_API_KEY` | opencode 调用 GLM-5.2 模型 |
+| `BAILIAN_API_KEY` | opencode 调用稀宇 MiniMax-M3 模型（通过 `{env:}` 引用，不落盘） |
 | `GC_TOKEN` | GitCode CLI 认证（创建 issue） |
 | `FEISHU_WEBHOOK` | 飞书机器人 webhook URL |
+
+> 读取 Ascend/pytorch Actions 数据使用 GitHub Actions 自动提供的 `GITHUB_TOKEN`，无需额外 PAT。
 
 ## 本地开发
 

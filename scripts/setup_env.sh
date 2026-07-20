@@ -2,7 +2,7 @@
 # setup_env.sh - 在 GitHub Actions runner 中安装 opencode、gitcode CLI，并复制 skills。
 #
 # 环境变量：
-#   BAILIAN_API_KEY  - 智谱 API key（必需）
+#   BAILIAN_API_KEY  - 稀宇 MiniMax API key（必需，通过 opencode {env:} 引用，不落盘）
 #   GC_TOKEN         - GitCode CLI token（issue-create workflow 需要）
 set -euo pipefail
 
@@ -69,26 +69,27 @@ if [[ -z "${BAILIAN_API_KEY:-}" ]]; then
     exit 1
 fi
 
-cat > "$HOME/.config/opencode/opencode.jsonc" <<EOF
+cat > "$HOME/.config/opencode/opencode.jsonc" <<'EOF'
 {
-  "\$schema": "https://opencode.ai/config.json",
+  "$schema": "https://opencode.ai/config.json",
+  "disabled_providers": [],
   "provider": {
     "bailian": {
-      "name": "智谱",
-      "npm": "@ai-sdk/openai-compatible",
+      "name": "稀宇",
+      "npm": "@ai-sdk/anthropic",
       "options": {
-        "apiKey": "${BAILIAN_API_KEY}",
-        "baseURL": "https://open.bigmodel.cn/api/paas/v4"
+        "apiKey": "{env:BAILIAN_API_KEY}",
+        "baseURL": "https://api.minimaxi.com/anthropic/v1"
       },
       "models": {
-        "glm-5.2": {
-          "name": "glm-5.2"
+        "MiniMax-M3": {
+          "name": "MiniMax-M3"
         }
       }
     }
   }
 }
 EOF
-echo "opencode 配置已生成"
+echo "opencode 配置已生成（apiKey 通过 {env:BAILIAN_API_KEY} 引用环境变量，不落盘）"
 
 echo "=== 环境准备完成 ==="

@@ -19,7 +19,6 @@ permissions:
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  GH_PAT: ${{ secrets.GH_PAT }}
 
 jobs:
   monitor:
@@ -29,10 +28,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure GH PAT
-        run: |
-          echo "GH_TOKEN=${{ secrets.GH_PAT }}" >> $GITHUB_ENV
-          gh auth status 2>&1 || echo "PAT 未配置，将使用默认 GITHUB_TOKEN（可能受限）"
+      - name: Verify GH auth
+        run: gh auth status
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -129,7 +126,7 @@ jobs:
           4. 将分析报告写入 \$LOG_DIR/report.md（按 skill 中定义的 frontmatter + markdown 格式）"
 
           opencode run \
-            --model bailian/glm-5.2 \
+            --model bailian/MiniMax-M3 \
             --dir "$GITHUB_WORKSPACE" \
             "$PROMPT" 2>&1 | tee /tmp/opencode_output.log
 
