@@ -28,8 +28,9 @@ jobs:
 
       - name: Find latest report
         id: find
+        env:
+          REPORT_FILE: ${{ github.event.inputs.report_file || '' }}
         run: |
-          REPORT_FILE="${{ github.event.inputs.report_file || '' }}"
           if [[ -n "$REPORT_FILE" ]]; then
             RESULT=$(python3 scripts/find_latest_report.py --reports-dir reports --report-file "$REPORT_FILE" --json 2>/tmp/find_stderr)
           else

@@ -52,10 +52,10 @@ jobs:
 
       - name: Scan failures
         id: scan
+        env:
+          RUN_ID_INPUT: ${{ github.event.inputs.run_id || '' }}
+          HOURS: ${{ github.event.inputs.hours || '24' }}
         run: |
-          RUN_ID_INPUT="${{ github.event.inputs.run_id || '' }}"
-          HOURS="${{ github.event.inputs.hours || '24' }}"
-
           if [[ -n "$RUN_ID_INPUT" ]]; then
             echo "action=analyze" >> $GITHUB_OUTPUT
             echo "run_id=$RUN_ID_INPUT" >> $GITHUB_OUTPUT
