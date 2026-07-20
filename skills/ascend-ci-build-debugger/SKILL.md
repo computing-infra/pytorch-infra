@@ -9,6 +9,8 @@ description: 提取 Ascend/pytorch CI Trigger 流水线 build 阶段失败日志
 
 本技能分析 `Ascend/pytorch` 仓库 `pytorch_ci_trigger.yml` Action 的 **build 阶段失败**。
 
+主要分析目标是 `forward / build / pytorch_and_torch-npu_build` job 的失败（阻塞性问题，需最高优先级解决）。同时也覆盖 build 前置步骤的失败（如 `forward / build / fetch` 等），这类失败通常由网络问题或 GitHub Actions 自身问题导致，可能不涉及 pytorch 源码或 PR 引入，但同样需要输出分析报告和通知。
+
 工作流程分三步：
 
 1. **脚本提取** — 用 `gh run view --log-failed` 下载失败 job 的完整日志
@@ -72,6 +74,7 @@ python3 <skill-dir>/scripts/extract_failure_logs.py <run-id> --output <LOG_DIR>
      ```bash
      gh api "repos/<owner>/<repo>/commits/<sha>/pulls" --jq '.[] | {number,title,url,merged_at,user:.user.login}'
      ```
+   - 如果是网络/基础设施类失败（无源码变更），注明"不适用 — 基础设施问题"
    - 如果无法确定具体 PR，在报告中注明"无法确定"并说明原因
 
 ### 第三步：输出分析报告
@@ -104,9 +107,9 @@ failed_jobs:
 
 ## 失败概览
 
-| # | 失败 Job | 失败 Step | 错误类型 | 优先级 |
-|---|----------|-----------|----------|--------|
-| 1 | <job> | <step> | <类型> | P0 |
+| # | 失败 Job | 失败 Step | 错误类型 |
+|---|----------|-----------|----------|
+| 1 | <job> | <step> | <类型> |
 
 ## 详细分析
 
@@ -137,12 +140,3 @@ failed_jobs:
 - `pytorch/<path>:<line>`
 - `torch_npu/<path>:<line>`
 ```
-
-## 优先级定义
-
-| 优先级 | 含义 |
-|--------|------|
-| P0 | 阻塞性问题，所有 PR 都会失败（如 CANN 版本、GCC 配置） |
-| P1 | 高优先级，需尽快修复（如 pytorch API 变更、patch 失败） |
-| P2 | 中等优先级，可排期（如偶发的依赖下载失败） |
-| P3 | 低优先级 / 基础设施问题（如磁盘空间、OOM） |
