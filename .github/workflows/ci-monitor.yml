@@ -19,6 +19,7 @@ permissions:
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  BAILIAN_API_KEY: ${{ secrets.BAILIAN_API_KEY }}
 
 jobs:
   monitor:
@@ -91,7 +92,6 @@ jobs:
         if: steps.scan.outputs.action == 'analyze'
         run: bash scripts/setup_env.sh skills
         env:
-          BAILIAN_API_KEY: ${{ secrets.BAILIAN_API_KEY }}
           SKIP_GITCODE: 'true'
 
       - name: Extract failure logs
