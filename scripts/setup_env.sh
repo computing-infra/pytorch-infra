@@ -21,28 +21,31 @@ echo "=== 安装 gitcode CLI ==="
 if [[ "$SKIP_GITCODE" == "true" ]]; then
     echo "跳过 gitcode CLI 安装"
 elif ! command -v gc &>/dev/null; then
-    GC_VERSION="0.5.0"
+    GC_VERSION="0.8.0"
     ARCH=$(uname -m)
     case "$ARCH" in
         x86_64)  GC_ARCH="amd64" ;;
         aarch64) GC_ARCH="arm64" ;;
         *)       GC_ARCH="$ARCH" ;;
     esac
-    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-    GC_URL="https://gitcode.com/gitcode-cli/cli/releases/download/v${GC_VERSION}/gc_${OS}_${GC_ARCH}.tar.gz"
-    echo "下载: $GC_URL"
-    curl -fsSL "$GC_URL" -o /tmp/gc.tar.gz || {
-        echo "警告：下载 gitcode CLI 失败，尝试备用方式"
-        curl -fsSL "https://gitcode.com/gitcode-cli/cli/-/releases/v${GC_VERSION}/downloads/gc_${OS}_${GC_ARCH}.tar.gz" -o /tmp/gc.tar.gz || {
+
+    GC_DEB_URL="https://gitcode.com/gitcode-cli/cli/releases/download/v${GC_VERSION}/gc_${GC_VERSION}_${GC_ARCH}.deb"
+    echo "下载: $GC_DEB_URL"
+    curl -fsSL "$GC_DEB_URL" -o /tmp/gc.deb && sudo dpkg -i /tmp/gc.deb && {
+        echo "gitcode CLI 安装完成: $(gc version 2>&1 | head -1)"
+    } || {
+        echo "deb 安装失败，尝试 tar.gz 方式..."
+        GC_TGZ_URL="https://gitcode.com/gitcode-cli/cli/releases/download/v${GC_VERSION}/gc_linux_${GC_ARCH}.tar.gz"
+        curl -fsSL "$GC_TGZ_URL" -o /tmp/gc.tar.gz || {
             echo "错误：无法下载 gitcode CLI"
             exit 1
         }
+        mkdir -p /tmp/gc-extract
+        tar -xzf /tmp/gc.tar.gz -C /tmp/gc-extract
+        cp /tmp/gc-extract/gc /usr/local/bin/gc 2>/dev/null || sudo cp /tmp/gc-extract/gc /usr/local/bin/gc
+        chmod +x /usr/local/bin/gc
+        echo "gitcode CLI 安装完成（tar.gz）: $(gc version 2>&1 | head -1)"
     }
-    mkdir -p /tmp/gc-extract
-    tar -xzf /tmp/gc.tar.gz -C /tmp/gc-extract
-    cp /tmp/gc-extract/gc /usr/local/bin/gc 2>/dev/null || cp /tmp/gc-extract/gc "$HOME/.local/bin/gc" 2>/dev/null || sudo cp /tmp/gc-extract/gc /usr/local/bin/gc
-    chmod +x "$(command -v gc)"
-    echo "gitcode CLI 安装完成: $(gc version 2>&1 | head -1)"
 else
     echo "gitcode CLI 已安装: $(gc version 2>&1 | head -1)"
 fi

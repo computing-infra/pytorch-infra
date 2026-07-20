@@ -92,6 +92,7 @@ jobs:
         run: bash scripts/setup_env.sh skills
         env:
           BAILIAN_API_KEY: ${{ secrets.BAILIAN_API_KEY }}
+          SKIP_GITCODE: 'true'
 
       - name: Extract failure logs
         if: steps.scan.outputs.action == 'analyze'
