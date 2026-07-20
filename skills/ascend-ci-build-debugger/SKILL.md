@@ -9,11 +9,12 @@ description: 提取 Ascend/pytorch CI Trigger 流水线 build 阶段失败日志
 
 本技能分析 `Ascend/pytorch` 仓库 `pytorch_ci_trigger.yml` Action 的 **build 阶段失败**。
 
-工作流程分三步：
+工作流程分四步：
 
 1. **脚本提取** — 用 `gh run view --log-failed` 下载失败 job 的完整日志
-2. **源码交叉引用** — 利用本地 clone 的 pytorch / torch_npu 源码定位出错代码
-3. **AI 分析** — 逐错误分析根因，输出结构化报告
+2. **获取触发 PR 信息** — 从 run_name 提取 PR 编号，用 `gh pr view` 获取 PR 链接、合入时间等
+3. **源码交叉引用** — 利用本地 clone 的 pytorch / torch_npu 源码定位出错代码
+4. **AI 分析** — 逐错误分析根因，输出结构化报告
 
 ## 工作流程
 
@@ -46,7 +47,21 @@ python3 <skill-dir>/scripts/extract_failure_logs.py <run-id> --output <LOG_DIR>
    - 完整错误上下文（错误行前后各 50 行）
 3. 输出结构化 JSON 到 `<LOG_DIR>/failures.json`
 
-### 第二步：AI 逐错误分析
+### 第二步：获取触发 PR 信息
+
+从 `failures.json` 的 `run_name` 中提取 PR 编号（格式 `PR #189672 (closed)`），用 `gh` 获取 PR 详情：
+
+```bash
+gh pr view <PR编号> --repo pytorch/pytorch --json url,mergedAt,title,author
+```
+
+获取以下信息：
+- PR 链接（`url`）
+- 合入时间（`mergedAt`）
+- PR 标题（`title`）
+- 作者（`author.login`）
+
+### 第三步：AI 逐错误分析
 
 对 `failures.json` 中每个失败 job，AI 需要：
 
@@ -59,7 +74,7 @@ python3 <skill-dir>/scripts/extract_failure_logs.py <run-id> --output <LOG_DIR>
 4. **分析根因** — 判断失败的根本原因
 5. **给出修复方案** — 具体可操作的修复步骤（含文件路径和改动内容）
 
-### 第三步：输出分析报告
+### 第四步：输出分析报告
 
 将分析结果写入 `<LOG_DIR>/report.md`，格式如下：
 
@@ -86,6 +101,9 @@ failed_jobs:
 | 触发仓库 | <upstream_repo> |
 | 失败时间 | <created_at> |
 | 运行链接 | https://github.com/Ascend/pytorch/actions/runs/<run-id> |
+| 引入问题的 PR | [<PR标题>](<PR链接>) |
+| PR 合入时间 | <mergedAt> |
+| PR 作者 | <author> |
 
 ## 失败概览
 
@@ -114,20 +132,6 @@ failed_jobs:
 - `pytorch/<path>:<line>`
 - `torch_npu/<path>:<line>`
 ```
-
-## 已知 build 失败模式
-
-| 模式 | 特征 | 根因 | 修复 |
-|------|------|------|------|
-| CANN 版本不匹配 | `CANN version` 相关错误 | torch_npu 要求的 CANN 版本与 runner 安装的不一致 | 检查 `.github/workflows/_build.yml` 中的 CANN 安装步骤 |
-| GCC 版本错误 | `gcc: error: unrecognized command-line option` | GCC 版本过低或过高 | 检查 `gcc-toolset` 安装，确认 GCC 13 路径 |
-| torch_npu 源码冲突 | `error: redefinition of` 或 merge conflict | torch_npu master 与 pytorch main 不兼容 | 检查 rebase 状态，确认 torch_npu 补丁是否需要更新 |
-| cmake 配置错误 | `CMake Error` | CMakeLists.txt 中变量未定义或路径错误 | 检查 `CMakeLists.txt` 和 `setup.py` 中的配置 |
-| 磁盘空间不足 | `No space left on device` | runner 磁盘满 | 在 workflow 中添加磁盘清理步骤 |
-| OOM | `fatal error: Killed signal terminated program cc1plus` | 编译内存不足 | 降低并行度 `-j` 参数 |
-| 依赖下载失败 | `Connection timed out` 或 `404 Not Found` | pip/conda 下载超时或源不可用 | 重试或更换镜像源 |
-| pytorch API 变更 | `error: no member named` | pytorch main 移除/重命名了 API | 更新 torch_npu 中对应的 patch 文件 |
-| Patch 应用失败 | `error: patch failed` 或 `does not apply` | torch_npu patch 与 pytorch main 不兼容 | 更新 `test_upstream/` 下的 patch 文件 |
 
 ## 优先级定义
 
