@@ -90,6 +90,18 @@ cat > "$HOME/.config/opencode/opencode.jsonc" <<'EOF'
         }
       }
     }
+  },
+  "permission": {
+    "bash": "allow",
+    "read": "allow",
+    "edit": "allow",
+    "write": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "webfetch": "allow",
+    "task": "allow",
+    "todowrite": "allow",
+    "external_directory": "allow"
   }
 }
 EOF
