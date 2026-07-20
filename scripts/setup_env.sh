@@ -55,12 +55,13 @@ if [[ -n "${GC_TOKEN:-}" ]] && command -v gc &>/dev/null; then
     gc auth login --token "$GC_TOKEN" 2>&1 || echo "警告：gc auth login 失败（可能已登录）"
 fi
 
-echo "=== 复制 skills 到 ~/.claude/skills/ ==="
-mkdir -p "$HOME/.claude/skills"
+echo "=== 复制 skills 到项目根目录 .claude/skills/ ==="
+PROJECT_SKILLS_DIR="${PROJECT_DIR:-$PWD}/.claude/skills"
+mkdir -p "$PROJECT_SKILLS_DIR"
 if [[ -d "$SKILLS_SRC_DIR" ]]; then
-    cp -r "$SKILLS_SRC_DIR"/* "$HOME/.claude/skills/"
-    echo "已复制 skills:"
-    ls -la "$HOME/.claude/skills/"
+    cp -r "$SKILLS_SRC_DIR"/* "$PROJECT_SKILLS_DIR/"
+    echo "已复制 skills 到 $PROJECT_SKILLS_DIR:"
+    ls -la "$PROJECT_SKILLS_DIR/"
 else
     echo "警告：skills 目录不存在: $SKILLS_SRC_DIR"
 fi
