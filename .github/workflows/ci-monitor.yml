@@ -166,6 +166,7 @@ jobs:
           注意：frontmatter 中的 fingerprint 字段值应设为 \$FINGERPRINT"
 
           opencode run \
+            --auto \
             --model bailian/MiniMax-M3 \
             --dir "$GITHUB_WORKSPACE" \
             "$PROMPT" 2>&1 | tee /tmp/opencode_output.log
