@@ -9,12 +9,11 @@ description: 提取 Ascend/pytorch CI Trigger 流水线 build 阶段失败日志
 
 本技能分析 `Ascend/pytorch` 仓库 `pytorch_ci_trigger.yml` Action 的 **build 阶段失败**。
 
-工作流程分四步：
+工作流程分三步：
 
 1. **脚本提取** — 用 `gh run view --log-failed` 下载失败 job 的完整日志
-2. **获取触发 PR 信息** — 从 run_name 提取 PR 编号，用 `gh pr view` 获取 PR 链接、合入时间等
-3. **源码交叉引用** — 利用本地 clone 的 pytorch / torch_npu 源码定位出错代码
-4. **AI 分析** — 逐错误分析根因，输出结构化报告
+2. **源码交叉引用 + git 历史追溯** — 利用本地 clone 的 pytorch / torch_npu 源码定位出错代码，并通过 `gh api` 追溯引入问题的 commit 和 PR
+3. **AI 分析** — 逐错误分析根因，输出结构化报告
 
 ## 工作流程
 
@@ -47,21 +46,7 @@ python3 <skill-dir>/scripts/extract_failure_logs.py <run-id> --output <LOG_DIR>
    - 完整错误上下文（错误行前后各 50 行）
 3. 输出结构化 JSON 到 `<LOG_DIR>/failures.json`
 
-### 第二步：获取触发 PR 信息
-
-从 `failures.json` 的 `run_name` 中提取 PR 编号（格式 `PR #189672 (closed)`），用 `gh` 获取 PR 详情：
-
-```bash
-gh pr view <PR编号> --repo pytorch/pytorch --json url,mergedAt,title,author
-```
-
-获取以下信息：
-- PR 链接（`url`）
-- 合入时间（`mergedAt`）
-- PR 标题（`title`）
-- 作者（`author.login`）
-
-### 第三步：AI 逐错误分析
+### 第二步：AI 逐错误分析
 
 对 `failures.json` 中每个失败 job，AI 需要：
 
@@ -73,8 +58,23 @@ gh pr view <PR编号> --repo pytorch/pytorch --json url,mergedAt,title,author
    - 相关的 patch 文件（torch_npu 中的 `*.patch`）
 4. **分析根因** — 判断失败的根本原因
 5. **给出修复方案** — 具体可操作的修复步骤（含文件路径和改动内容）
+6. **追溯引入问题的 PR** — 注意：源码为 `--depth=1` 浅克隆，`git log`/`git blame` 无历史，需通过 `gh api` 查询：
+   - 定位到出错的源文件后，查询该文件的最近提交历史：
+     ```bash
+     gh api "repos/pytorch/pytorch/commits?path=<文件路径>&per_page=10" --jq '.[] | {sha,message:.commit.message[:80],date:.commit.committer.date,author:.author.login}'
+     ```
+   - 或对 torch_npu 仓库：
+     ```bash
+     gh api "repos/Ascend/pytorch/commits?path=<文件路径>&per_page=10" --jq '.[] | {sha,message:.commit.message[:80],date:.commit.committer.date,author:.author.login}'
+     ```
+   - 根据提交信息和错误类型，判断哪个 commit 最可能引入了问题
+   - 查询该 commit 关联的 PR：
+     ```bash
+     gh api "repos/<owner>/<repo>/commits/<sha>/pulls" --jq '.[] | {number,title,url,merged_at,user:.user.login}'
+     ```
+   - 如果无法确定具体 PR，在报告中注明"无法确定"并说明原因
 
-### 第四步：输出分析报告
+### 第三步：输出分析报告
 
 将分析结果写入 `<LOG_DIR>/report.md`，格式如下：
 
@@ -101,9 +101,6 @@ failed_jobs:
 | 触发仓库 | <upstream_repo> |
 | 失败时间 | <created_at> |
 | 运行链接 | https://github.com/Ascend/pytorch/actions/runs/<run-id> |
-| 引入问题的 PR | [<PR标题>](<PR链接>) |
-| PR 合入时间 | <mergedAt> |
-| PR 作者 | <author> |
 
 ## 失败概览
 
@@ -124,6 +121,14 @@ failed_jobs:
 
 **根因分析**:
 <详细分析，含源码文件:行号引用>
+
+**引入问题的 PR**（AI 基于 git 历史分析，非触发 PR）:
+- PR 链接: <PR URL 或"无法确定">
+- PR 标题: <标题>
+- 合入时间: <mergedAt>
+- 作者: <author>
+- 引入 commit: <commit SHA>
+- 判断依据: <为什么认为是这个 PR 引入的>
 
 **修复方案**:
 <具体修复步骤>
