@@ -61,6 +61,7 @@ jobs:
             echo "action=analyze" >> $GITHUB_OUTPUT
             echo "run_id=$RUN_ID_INPUT" >> $GITHUB_OUTPUT
             echo "run_name=手动指定" >> $GITHUB_OUTPUT
+            echo "run_url=https://github.com/Ascend/pytorch/actions/runs/$RUN_ID_INPUT" >> $GITHUB_OUTPUT
             echo "手动指定分析 Run ID: $RUN_ID_INPUT"
           else
             SCAN_OUTPUT=$(python3 scripts/scan_failures.py --hours "$HOURS" --json 2>/tmp/scan_stderr)
@@ -72,14 +73,18 @@ jobs:
             if [[ "$ACTION" != "analyze" ]]; then
               REASON=$(echo "$SCAN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('reason','未知'))" 2>/dev/null || echo "未知")
               echo "skip_reason=$REASON" >> $GITHUB_OUTPUT
+              RUN_URL=$(echo "$SCAN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('run',{}).get('html_url',''))" 2>/dev/null || echo "")
+              echo "run_url=$RUN_URL" >> $GITHUB_OUTPUT
               echo "跳过分析: $REASON"
               exit 0
             fi
 
             RUN_ID=$(echo "$SCAN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['run']['id'])" 2>/dev/null || echo "")
             RUN_NAME=$(echo "$SCAN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['run'].get('run_name',''))" 2>/dev/null || echo "")
+            RUN_URL=$(echo "$SCAN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['run'].get('html_url',''))" 2>/dev/null || echo "")
             echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
             echo "run_name=$RUN_NAME" >> $GITHUB_OUTPUT
+            echo "run_url=$RUN_URL" >> $GITHUB_OUTPUT
             echo "发现需要分析的 build 失败: $RUN_ID ($RUN_NAME)"
           fi
 
@@ -222,15 +227,21 @@ jobs:
         run: |
           echo "## CI Monitor Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          RUN_URL="${{ steps.scan.outputs.run_url }}"
+          RUN_NAME="${{ steps.scan.outputs.run_name }}"
+          if [[ -n "$RUN_URL" ]]; then
+            echo "**Action 执行**: [$RUN_NAME]($RUN_URL)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
           if [[ "${{ steps.scan.outputs.action }}" != "analyze" ]]; then
             echo "⏭️ 跳过分析: ${{ steps.scan.outputs.skip_reason }}" >> $GITHUB_STEP_SUMMARY
           elif [[ "${{ steps.dedup.outputs.duplicate }}" == "true" ]]; then
             echo "⏭️ 跳过：同根因报告已存在 ${{ steps.dedup.outputs.existing_report }}" >> $GITHUB_STEP_SUMMARY
             echo "指纹: \`${{ steps.dedup.outputs.fingerprint }}\`" >> $GITHUB_STEP_SUMMARY
           elif [[ "${{ steps.analysis.outputs.report_generated }}" == "true" ]]; then
-            echo "✅ 已分析 Run ${{ steps.scan.outputs.run_id }} 并生成报告" >> $GITHUB_STEP_SUMMARY
+            echo "✅ 已分析并生成报告" >> $GITHUB_STEP_SUMMARY
             echo "报告: ${{ steps.save.outputs.report_file }}" >> $GITHUB_STEP_SUMMARY
             echo "指纹: \`${{ steps.dedup.outputs.fingerprint }}\`" >> $GITHUB_STEP_SUMMARY
           else
-            echo "⚠️ Run ${{ steps.scan.outputs.run_id }} 分析未完成" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ 分析未完成" >> $GITHUB_STEP_SUMMARY
           fi
