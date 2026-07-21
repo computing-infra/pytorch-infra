@@ -10,7 +10,7 @@ scan_failures.py - 扫描 Ascend/pytorch 的 pytorch_ci_trigger.yml 运行。
 因此预过滤只检查 (closed) 运行以减少 API 调用。
 
 用法：
-    python3 scan_failures.py [--hours 72] [--json]
+    python3 scan_failures.py [--hours 24] [--json]
 """
 
 import json
@@ -21,7 +21,6 @@ import time
 REPO = "Ascend/pytorch"
 WORKFLOW_FILE = "pytorch_ci_trigger.yml"
 BUILD_JOB_NAME = "forward / build / pytorch_and_torch-npu_build"
-FORWARD_JOB_PREFIX = "forward /"
 MAX_PAGES = 5
 
 
@@ -88,14 +87,6 @@ def find_build_job(jobs: list[dict]) -> dict | None:
     return None
 
 
-def find_failed_forward_jobs(jobs: list[dict]) -> list[dict]:
-    return [j for j in jobs if j.get("name", "").startswith(FORWARD_JOB_PREFIX) and j.get("conclusion") == "failure"]
-
-
-def has_forward_jobs(jobs: list[dict]) -> bool:
-    return any(j.get("name", "").startswith(FORWARD_JOB_PREFIX) for j in jobs)
-
-
 def get_run_name(run_id: str) -> str:
     info = gh_api(f"repos/{REPO}/actions/runs/{run_id}", jq="{run_name,name}")
     if isinstance(info, dict):
@@ -107,7 +98,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="扫描 pytorch_ci_trigger.yml build 执行结果")
-    parser.add_argument("--hours", type=int, default=72, help="扫描最近 N 小时（默认 72）")
+    parser.add_argument("--hours", type=int, default=24, help="扫描最近 N 小时（默认 24）")
     parser.add_argument("--json", action="store_true", help="输出 JSON 格式")
     args = parser.parse_args()
 
@@ -132,33 +123,39 @@ def main():
         run["run_name"] = run_name
 
         jobs = get_run_jobs(run_id)
-
-        if not has_forward_jobs(jobs):
-            print(f"  {run_id} ({run_name}): 无 forward job（PR 未合并或非 main）", file=sys.stderr)
-            continue
-
         build_job = find_build_job(jobs)
-        failed_forward = find_failed_forward_jobs(jobs)
-        failed_names = [j["name"] for j in failed_forward]
 
-        if not failed_forward:
-            build_status = build_job.get("conclusion") if build_job else "skipped"
-            print(f"  {run_id} ({run_name}): 无失败 forward job（build={build_status}），继续查找", file=sys.stderr)
+        if not build_job:
+            print(f"  {run_id} ({run_name}): 无 build job（PR 未合并或非 main），跳过", file=sys.stderr)
             continue
 
-        print(f"  {run_id} ({run_name}): 失败 jobs={failed_names}", file=sys.stderr)
-        print(f"发现失败: {run_id} ({run_name})", file=sys.stderr)
-        run["failed_jobs"] = failed_names
-        if args.json:
-            print(json.dumps({
-                "action": "analyze",
-                "run": run,
-            }, ensure_ascii=False, indent=2))
-        else:
-            print(run_id)
-        return
+        build_conclusion = build_job.get("conclusion", "")
+        print(f"  {run_id} ({run_name}): build={build_conclusion}", file=sys.stderr)
 
-    print("未找到有失败的 forward 运行", file=sys.stderr)
+        if build_conclusion == "success":
+            print(f"最新 build 成功，无需分析", file=sys.stderr)
+            if args.json:
+                print(json.dumps({
+                    "action": "skip",
+                    "reason": "latest_build_succeeded",
+                    "run": run,
+                }, ensure_ascii=False, indent=2))
+            return
+
+        if build_conclusion == "failure":
+            print(f"发现 build 失败: {run_id} ({run_name})", file=sys.stderr)
+            if args.json:
+                print(json.dumps({
+                    "action": "analyze",
+                    "run": run,
+                }, ensure_ascii=False, indent=2))
+            else:
+                print(run_id)
+            return
+
+        print(f"  build conclusion={build_conclusion}，继续查找", file=sys.stderr)
+
+    print("未找到执行了 build job 的运行", file=sys.stderr)
     if args.json:
         print(json.dumps({"action": "skip", "reason": "no_build_run_found"}))
 
